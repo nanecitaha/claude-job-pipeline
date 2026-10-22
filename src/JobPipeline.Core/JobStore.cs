@@ -1,13 +1,18 @@
+using System.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Data.Sqlite;
 
 namespace JobPipeline.Core;
 
 /// <summary>
-/// The single owner of jobs.json. Every caller (MCP server, worker, tests) goes through here, never
-/// the file directly. Each operation takes a cross-process lock, reads, applies one guarded state
-/// transition and writes atomically (temp file + replace, previous version kept as jobs.json.bak),
-/// so concurrent writers can't lose each other's updates or leave a half-written file.
+/// The single owner of the pipeline database (jobs.db, SQLite). Every caller (MCP server, worker,
+/// web API, tests) goes through here. Each write runs in one BEGIN IMMEDIATE transaction, so writers in
+/// different processes are serialized and can't lose each other's updates; WAL mode lets readers
+/// (e.g. a web app) read while a write is in progress.
+///
+/// Each row keeps the full job as a JSON document plus indexed columns (status, company, dates, URLs)
+/// for querying. Job descriptions live in their own table.
 /// </summary>
 public sealed class JobStore
 {
@@ -18,20 +23,28 @@ public sealed class JobStore
         DefaultIgnoreCondition = JsonIgnoreCondition.Never,
     };
 
-    readonly string _path, _lockPath;
+    static readonly JsonSerializerOptions Compact = new(Json) { WriteIndented = false };
+
+    readonly string _connectionString;
     readonly TimeProvider _clock;
 
     public string DataDir { get; }
+    public string DatabasePath { get; }
 
     public JobStore(string dataDir, TimeProvider? clock = null)
     {
         DataDir = Path.GetFullPath(dataDir);
         Directory.CreateDirectory(DataDir);
-        Directory.CreateDirectory(Path.Combine(DataDir, "jds"));
         Directory.CreateDirectory(Path.Combine(DataDir, "resumes"));
-        _path = Path.Combine(DataDir, "jobs.json");
-        _lockPath = Path.Combine(DataDir, "jobs.lock");
+        DatabasePath = Path.Combine(DataDir, "jobs.db");
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = DatabasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            DefaultTimeout = 30,
+        }.ToString();
         _clock = clock ?? TimeProvider.System;
+        Initialize();
     }
 
     /// <summary>Default data folder shared by the MCP server and the worker when nothing is configured.</summary>
@@ -90,10 +103,7 @@ public sealed class JobStore
                 UpdatedAt = Now,
             };
             if (!string.IsNullOrWhiteSpace(input.JdText))
-            {
-                job.JdPath = Path.Combine("jds", $"{job.Id}.txt");
-                File.WriteAllText(Resolve(job.JdPath), input.JdText);
-            }
+                db.PendingJds[job.Id] = input.JdText;   // saved in the same transaction as the job
             job.History.Add(new StatusChange(null, JobStatus.New, Now, by, null));
             db.Jobs.Add(job);
             return (new AddResult(job.Id, "added", JobStatus.New), true);
@@ -273,7 +283,15 @@ public sealed class JobStore
 
     public Job? GetJob(Guid id) => Read(db => db.Jobs.FirstOrDefault(j => j.Id == id) is { } j ? Clone(j) : null);
 
-    public string? ReadJd(Job job) => job.JdPath is { } p && File.Exists(Resolve(p)) ? File.ReadAllText(Resolve(p)) : null;
+    public string? ReadJd(Job job)
+    {
+        if (job.JdPath is { } p && File.Exists(Resolve(p))) return File.ReadAllText(Resolve(p));   // legacy file
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT text FROM job_descriptions WHERE job_id = $id";
+        cmd.Parameters.AddWithValue("$id", job.Id.ToString());
+        return cmd.ExecuteScalar() as string;
+    }
 
     public IReadOnlyList<JobSummary> ListJobs(JobStatus? status, int limit, int offset = 0) => Read(db =>
         db.Jobs.Where(j => status is null || j.Status == status)
@@ -352,70 +370,197 @@ public sealed class JobStore
 
     static Job Clone(Job j) => JsonSerializer.Deserialize<Job>(JsonSerializer.Serialize(j, Json), Json)!;
 
-    T Read<T>(Func<JobFile, T> f) => Mutate(db => (f(db), false));
+    // Reads see one consistent snapshot (a single SELECT in WAL mode) and never block writers.
+    T Read<T>(Func<JobFile, T> f)
+    {
+        using var conn = Open();
+        return f(LoadAll(conn, null));
+    }
 
+    // One write = one BEGIN IMMEDIATE transaction: load, apply one guarded change, save only the rows that
+    // changed. IMMEDIATE takes SQLite's write lock up front, so two processes can't both read the same state
+    // and then overwrite each other.
     T Mutate<T>(Func<JobFile, (T result, bool dirty)> f)
     {
-        using var _ = AcquireLock();
-        var db = Load();
+        using var conn = Open();
+        using var tx = conn.BeginTransaction(IsolationLevel.Serializable, deferred: false);
+        var db = LoadAll(conn, tx);
+        var before = db.Jobs.ToDictionary(j => j.Id, j => JsonSerializer.Serialize(j, Compact));
         var (result, dirty) = f(db);
-        if (dirty) Save(db);
+        if (dirty)
+        {
+            foreach (var job in db.Jobs)
+            {
+                var doc = JsonSerializer.Serialize(job, Compact);
+                if (!before.TryGetValue(job.Id, out var old) || old != doc) Upsert(conn, tx, job, doc);
+            }
+            foreach (var (id, text) in db.PendingJds) SaveJd(conn, tx, id, text);
+            tx.Commit();
+        }
         return result;
     }
 
-    FileStream AcquireLock()
+    SqliteConnection Open()
     {
-        // An exclusively-opened lock file works across processes and across Windows sessions
-        // (a Windows service and the desktop app's MCP server), and the OS releases it if a process dies.
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (true)
+        var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        Exec(conn, null, "PRAGMA busy_timeout = 30000; PRAGMA foreign_keys = ON;");
+        return conn;
+    }
+
+    void Initialize()
+    {
+        using var conn = Open();
+        Exec(conn, null, "PRAGMA journal_mode = WAL;");
+        using (var tx = conn.BeginTransaction(IsolationLevel.Serializable, deferred: false))
         {
-            try
-            {
-                return new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
-            }
-            catch (IOException) when (DateTime.UtcNow < deadline)
-            {
-                Thread.Sleep(Random.Shared.Next(20, 80));
-            }
-            catch (UnauthorizedAccessException) when (DateTime.UtcNow < deadline)
-            {
-                Thread.Sleep(Random.Shared.Next(20, 80));   // Windows reports a pending delete/lock this way sometimes
-            }
+            Exec(conn, tx, """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id              TEXT PRIMARY KEY,
+                    status          TEXT NOT NULL,
+                    company         TEXT NOT NULL,
+                    title           TEXT NOT NULL,
+                    source          TEXT,
+                    dedupe_key      TEXT NOT NULL,
+                    external_job_id TEXT,
+                    listing_url     TEXT,
+                    apply_url       TEXT,
+                    is_remote       INTEGER,
+                    is_easy_apply   INTEGER NOT NULL DEFAULT 0,
+                    date_posted     TEXT,
+                    date_applied    TEXT,
+                    interview_date  TEXT,
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL,
+                    doc             TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_jobs_status     ON jobs(status);
+                CREATE INDEX IF NOT EXISTS ix_jobs_dedupe     ON jobs(dedupe_key);
+                CREATE INDEX IF NOT EXISTS ix_jobs_updated_at ON jobs(updated_at);
+                CREATE TABLE IF NOT EXISTS job_descriptions (
+                    job_id TEXT PRIMARY KEY REFERENCES jobs(id),
+                    text   TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
+                """);
+            ImportLegacyJson(conn, tx);
+            tx.Commit();
         }
     }
 
-    JobFile Load()
+    /// <summary>
+    /// One-time migration from the earlier jobs.json store: runs only when the database is empty and a
+    /// jobs.json exists. Job descriptions are pulled in from jds/*.txt; jobs.json is renamed afterwards.
+    /// </summary>
+    void ImportLegacyJson(SqliteConnection conn, SqliteTransaction tx)
     {
-        if (!File.Exists(_path)) return new JobFile();
-        var text = File.ReadAllText(_path);
-        if (string.IsNullOrWhiteSpace(text)) return new JobFile();
+        var legacy = Path.Combine(DataDir, "jobs.json");
+        if (!File.Exists(legacy) || Scalar(conn, tx, "SELECT COUNT(*) FROM jobs") > 0) return;
+
+        JobFile old;
         try
         {
-            return JsonSerializer.Deserialize<JobFile>(text, Json) ?? new JobFile();
+            old = JsonSerializer.Deserialize<JobFile>(File.ReadAllText(legacy), Json) ?? new JobFile();
         }
         catch (JsonException ex)
         {
-            // Never overwrite a file we can't parse; that would silently wipe the pipeline.
-            throw new PipelineException(
-                $"jobs.json is not valid JSON ({ex.Message}). Fix it by hand or restore jobs.json.bak, then retry.");
+            throw new PipelineException($"Can't import jobs.json: it is not valid JSON ({ex.Message}). Fix or remove it, then restart.");
         }
-    }
 
-    void Save(JobFile db)
-    {
-        var tmp = _path + ".tmp";
-        using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+        foreach (var job in old.Jobs)
         {
-            JsonSerializer.Serialize(fs, db, Json);
-            fs.Flush(flushToDisk: true);
+            if (job.JdPath is { } p && File.Exists(Resolve(p))) SaveJdLater(job, File.ReadAllText(Resolve(p)));
+            job.JdPath = null;
+            Upsert(conn, tx, job, JsonSerializer.Serialize(job, Compact));
         }
-        if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak", ignoreMetadataErrors: true);
-        else File.Move(tmp, _path);
-    }
-}
+        foreach (var (id, text) in old.PendingJds) SaveJd(conn, tx, id, text);
+        File.Move(legacy, legacy + ".imported", overwrite: true);
 
-public enum ResolveOutcome { Retry, Applied, Skip }
+        void SaveJdLater(Job j, string text) => old.PendingJds[j.Id] = text;
+    }
+
+    static JobFile LoadAll(SqliteConnection conn, SqliteTransaction? tx)
+    {
+        var db = new JobFile();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT doc FROM jobs";
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) db.Jobs.Add(JsonSerializer.Deserialize<Job>(r.GetString(0), Json)!);
+        return db;
+    }
+
+    static void Upsert(SqliteConnection conn, SqliteTransaction? tx, Job j, string doc)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO jobs (id, status, company, title, source, dedupe_key, external_job_id, listing_url, apply_url,
+                              is_remote, is_easy_apply, date_posted, date_applied, interview_date, created_at, updated_at, doc)
+            VALUES ($id, $status, $company, $title, $source, $dedupe, $ext, $listing, $apply,
+                    $remote, $easy, $posted, $applied, $interview, $created, $updated, $doc)
+            ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status, company = excluded.company, title = excluded.title, source = excluded.source,
+                dedupe_key = excluded.dedupe_key, external_job_id = excluded.external_job_id,
+                listing_url = excluded.listing_url, apply_url = excluded.apply_url, is_remote = excluded.is_remote,
+                is_easy_apply = excluded.is_easy_apply, date_posted = excluded.date_posted,
+                date_applied = excluded.date_applied, interview_date = excluded.interview_date,
+                updated_at = excluded.updated_at, doc = excluded.doc
+            """;
+        Add(cmd, "$id", j.Id.ToString());
+        Add(cmd, "$status", j.Status.ToString());
+        Add(cmd, "$company", j.Company);
+        Add(cmd, "$title", j.Title);
+        Add(cmd, "$source", j.Source);
+        Add(cmd, "$dedupe", j.DedupeKey);
+        Add(cmd, "$ext", j.ExternalJobId);
+        Add(cmd, "$listing", j.ListingUrl);
+        Add(cmd, "$apply", j.ApplyUrl);
+        Add(cmd, "$remote", j.IsRemote is null ? null : (object)(j.IsRemote.Value ? 1 : 0));
+        Add(cmd, "$easy", j.IsEasyApply ? 1 : 0);
+        Add(cmd, "$posted", j.DatePosted);
+        Add(cmd, "$applied", j.DateApplied?.ToString("O"));
+        Add(cmd, "$interview", j.InterviewDate?.ToString("O"));
+        Add(cmd, "$created", j.CreatedAt.ToUniversalTime().ToString("O"));
+        Add(cmd, "$updated", j.UpdatedAt.ToUniversalTime().ToString("O"));
+        Add(cmd, "$doc", doc);
+        cmd.ExecuteNonQuery();
+    }
+
+    static void SaveJd(SqliteConnection conn, SqliteTransaction? tx, Guid id, string text)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "INSERT INTO job_descriptions (job_id, text) VALUES ($id, $text) " +
+                          "ON CONFLICT(job_id) DO UPDATE SET text = excluded.text";
+        Add(cmd, "$id", id.ToString());
+        Add(cmd, "$text", text);
+        cmd.ExecuteNonQuery();
+    }
+
+    static void Exec(SqliteConnection conn, SqliteTransaction? tx, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    static long Scalar(SqliteConnection conn, SqliteTransaction? tx, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = sql;
+        return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
+    static void Add(SqliteCommand cmd, string name, object? value) =>
+        cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
+}
 
 public sealed class PipelineException(string message) : Exception(message);
 

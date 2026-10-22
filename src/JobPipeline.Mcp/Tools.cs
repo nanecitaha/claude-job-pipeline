@@ -9,7 +9,7 @@ public static class Tools
         "Job pipeline store. Statuses: New → Tailoring → ReadyToApply → Applying → Applied → Interviewing|Rejected, " +
         "with exits ActionNeeded, Skipped, Expired, Failed. The hunt only adds jobs (add_jobs). A separate .NET worker " +
         "tailors resumes and moves jobs to ReadyToApply. Applying: call begin_apply_run first, then start_apply right " +
-        "before opening each form, then mark_applied or flag_action. Never edit jobs.json directly.";
+        "before opening each form, then mark_applied or flag_action. Never edit jobs.db directly.";
 
     static readonly JsonSerializerOptions ArgOptions = new(JobStore.Json) { PropertyNameCaseInsensitive = true };
 

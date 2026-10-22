@@ -221,16 +221,47 @@ Test("concurrency: parallel claimers never claim the same job twice", () =>
     Eq(60, claimed.Distinct().Count(), "distinct claims");
 });
 
-Test("a corrupt jobs.json is refused, not overwritten", () =>
+Test("an existing jobs.json (earlier version) is imported once, with its job descriptions", () =>
+{
+    var dir = NewDir();
+    var id = Guid.NewGuid();
+    Directory.CreateDirectory(Path.Combine(dir, "jds"));
+    File.WriteAllText(Path.Combine(dir, "jds", $"{id}.txt"), "Legacy JD: C#, .NET 8");
+    File.WriteAllText(Path.Combine(dir, "jobs.json"), $$"""
+        {"version":1,"jobs":[{"id":"{{id}}","status":"Applied","source":"builtin","company":"Old Co",
+          "title":"Senior .NET Developer","listingUrl":"https://old.example/1","dedupeKey":"old|senior net developer",
+          "jdPath":"jds/{{id}}.txt","techStack":["C#"],"emails":[],"history":[],
+          "createdAt":"2026-10-01T00:00:00+00:00","updatedAt":"2026-10-02T00:00:00+00:00"}]}
+        """);
+    var s = new JobStore(dir);
+    var job = s.GetJob(id)!;
+    Eq(JobStatus.Applied, job.Status);
+    Eq<string?>(null, job.JdPath, "description moved into the database");
+    Eq("Legacy JD: C#, .NET 8", s.ReadJd(job));
+    if (File.Exists(Path.Combine(dir, "jobs.json")) || !File.Exists(Path.Combine(dir, "jobs.json.imported")))
+        throw new Exception("jobs.json should be renamed to jobs.json.imported");
+    Eq("duplicate", s.AddJob(Posting("Old Co", "Senior .NET Developer", "https://other")).Result);
+    Eq(1, new JobStore(dir).Stats().Values.Sum(), "re-opening does not import twice");
+});
+
+Test("a failed write rolls back completely", () =>
+{
+    var s = new JobStore(NewDir());
+    var id = s.AddJob(Posting()).Id;
+    Throws<PipelineException>(() => s.MarkApplied(id), "needs Applying");
+    var j = s.GetJob(id)!;
+    Eq(JobStatus.New, j.Status);
+    Eq(1, j.History.Count);
+});
+
+Test("database file and job descriptions live in the data folder", () =>
 {
     var dir = NewDir();
     var s = new JobStore(dir);
-    s.AddJob(Posting());
-    s.AddJob(Posting("Second", "Senior .NET Developer", "https://w"));   // second save produces jobs.json.bak
-    File.WriteAllText(Path.Combine(dir, "jobs.json"), "{ not json");
-    Throws<PipelineException>(() => s.AddJob(Posting("Other", "Senior C# Developer", "https://z")), "jobs.json.bak");
-    Eq("{ not json", File.ReadAllText(Path.Combine(dir, "jobs.json")));
-    if (!File.Exists(Path.Combine(dir, "jobs.json.bak"))) throw new Exception("backup missing");
+    var id = s.AddJob(Posting()).Id;
+    if (!File.Exists(Path.Combine(dir, "jobs.db"))) throw new Exception("jobs.db missing");
+    Eq<string?>(null, s.GetJob(id)!.JdPath);
+    Eq("We need C# and .NET 8.", s.ReadJd(s.GetJob(id)!));
 });
 
 Console.WriteLine($"\n{passed} passed, {failures} failed");
