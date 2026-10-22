@@ -562,6 +562,8 @@ public sealed class JobStore
         cmd.Parameters.AddWithValue(name, value ?? DBNull.Value);
 }
 
+public enum ResolveOutcome { Retry, Applied, Skip }
+
 public sealed class PipelineException(string message) : Exception(message);
 
 public sealed record AddResult(Guid Id, string Result, JobStatus Status);
