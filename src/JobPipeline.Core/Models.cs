@@ -50,7 +50,7 @@ public sealed class Job
     public List<string> TechStack { get; set; } = new(); // copied exactly as written in the posting
     public string? DatePosted { get; set; }              // yyyy-MM-dd when known
     public bool IsEasyApply { get; set; }
-    public string? JdPath { get; set; }                  // relative to the data folder (jds/{id}.txt)
+    public string? JdPath { get; set; }                  // legacy only; descriptions now live in the database
     public string DedupeKey { get; set; } = "";
 
     // Pipeline state
@@ -104,4 +104,7 @@ internal sealed class JobFile
 {
     public int Version { get; set; } = 1;
     public List<Job> Jobs { get; set; } = new();
+
+    /// <summary>Job descriptions added during this write, saved in the same transaction.</summary>
+    [JsonIgnore] public Dictionary<Guid, string> PendingJds { get; } = new();
 }

@@ -15,15 +15,17 @@ Runs on a Claude subscription (Claude desktop + this local MCP server); no API k
  job-hunt skill ──add_jobs──►┐                       ┌──begin_apply_run / start_apply──► job-apply skill
                              │   job-pipeline MCP    │◄─mark_applied / flag_action / close_job
  job-email-sync ─record_email►│  (JobPipeline.Mcp)   │
-                             └──────► jobs.json ◄────┘
+                             └──────► jobs.db ◄──────┘
                                          ▲
                        claim / complete  │
                           JobPipeline.Worker (tailors resumes)
 ```
 
-Claude never edits `jobs.json` directly. Every write goes through `JobStore`, which takes a cross-process file
-lock, applies one allowed status change and writes atomically (`jobs.json.bak` keeps the previous version).
-No NuGet packages: the MCP protocol is implemented on `System.Text.Json`, and the worker uses the ASP.NET Core
+Everything lives in one SQLite database, `jobs.db`. Every write goes through `JobStore` as a single
+`BEGIN IMMEDIATE` transaction that applies one allowed status change, so the MCP server, the worker and any
+web app can run at the same time without losing updates; WAL mode lets readers query while a write runs.
+Each row stores the full job as JSON plus indexed columns (status, company, dates, URLs) for querying.
+The only package is `Microsoft.Data.Sqlite`: the MCP protocol is implemented on `System.Text.Json`, and the worker uses the ASP.NET Core
 shared framework.
 
 ## Status flow
@@ -59,7 +61,7 @@ because it may already have been submitted.
 1. **.NET 8 SDK**: `winget install Microsoft.DotNet.SDK.8`
 2. **Build**, from the repo folder:
    ```powershell
-   dotnet run --project tests\JobPipeline.SelfTest            # 16 checks, should all pass
+   dotnet run --project tests\JobPipeline.SelfTest            # 18 checks, should all pass
    python tests\e2e\mcp_e2e.py                                # MCP + worker end to end
    dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
    dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
@@ -120,8 +122,10 @@ tests/e2e                    MCP stdio + worker processes end to end (CI runs bo
 skills/                  job-hunt, job-apply, job-email-sync
 ```
 
-Data folder: `jobs.json`, `jobs.json.bak`, `jobs.lock`, `jds/{id}.txt`, `resumes/`, `hunt-config.md`,
-`applicant-profile.md`. Open `jobs.json` to read any time; to hand-edit it, stop the worker and Claude first.
+Data folder: `jobs.db` (+ its `-wal`/`-shm` files), `resumes/`, `hunt-config.md`, `applicant-profile.md`.
+Browse it with any SQLite tool (DB Browser for SQLite, `sqlite3`); for edits, stop the worker and Claude first or
+go through the MCP tools. Back it up with `sqlite3 jobs.db ".backup jobs-backup.db"` (safe while running).
+Upgrading from the earlier `jobs.json` store: the first start imports it and renames it `jobs.json.imported`.
 
 ## Contributing
 
