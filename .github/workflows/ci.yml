@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: dotnet build JobPipeline.sln
+      - name: Self-test (store, state machine, concurrency)
+        run: dotnet run --no-build --project tests/JobPipeline.SelfTest
+      - name: End-to-end (MCP stdio + worker)
+        run: python tests/e2e/mcp_e2e.py
