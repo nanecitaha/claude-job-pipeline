@@ -35,6 +35,13 @@ public sealed class PipelineOptions
     public string HighlightColor { get; set; } = "FF0000";
     /// <summary>Font size in points for added terms (e.g. 10 or 10.5). 0 = same size as the line.</summary>
     public double HighlightFontSize { get; set; }
+    /// <summary>
+    /// Replace {{LOCATION:Your City, ST}} with the job's city and state for on-site/hybrid jobs. Remote or unclear
+    /// locations keep your own. Off = always your own.
+    /// </summary>
+    public bool UpdateLocation { get; set; } = true;
+    /// <summary>How the job's location is written: "{location}" or e.g. "{home} · Relocating to {location}".</summary>
+    public string LocationFormat { get; set; } = "{location}";
 }
 
 public sealed record TailorRequest(Job Job, string JdText, string OutputDir);

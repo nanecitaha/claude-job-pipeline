@@ -9,6 +9,9 @@ namespace JobPipeline.Worker;
 /// The line is read as a comma-separated list; missing posting terms go where the tag was and the tag is removed.
 /// With Pipeline:HighlightAddedTerms (on by default) the added terms are bold and colored so they stand out.
 ///
+/// Location: put {{LOCATION:Your City, ST}} where your location goes. Remote jobs keep it; on-site and hybrid jobs
+/// show the job's city and state instead (Pipeline:UpdateLocation, Pipeline:LocationFormat).
+///
 /// It adds ALL missing posting terms, including ones you may not have. Treat these resumes as test output and
 /// don't submit them on real applications until relevance filtering (v2) exists.
 /// </summary>
@@ -30,7 +33,16 @@ public sealed class TechStackTailor(PipelineOptions options, IPdfConverter conve
             ? new AddedStyle(Bold: true, ColorHex: options.HighlightColor, FontSizePt: options.HighlightFontSize > 0 ? options.HighlightFontSize : null)
             : null;
 
-        var lines = DocxTemplate.AddMissing(template, docx, existing => Merge(existing, job.TechStack).Added, style);
+        string? movedTo = null;
+        var lines = DocxTemplate.AddMissing(template, docx, existing => Merge(existing, job.TechStack).Added, style,
+            location: options.UpdateLocation
+                ? home =>
+                {
+                    var result = ResumeLocation.For(job, home, options.LocationFormat);
+                    if (result.Changed) movedTo = result.Text;
+                    return result;
+                }
+                : home => (home, false));
         try
         {
             if (lines.Count == 0)
@@ -50,7 +62,8 @@ public sealed class TechStackTailor(PipelineOptions options, IPdfConverter conve
         await File.WriteAllTextAsync(Path.Combine(dir, ResumeFiles.TechStackFile), string.Join(", ", job.TechStack), ct);
 
         var total = lines.SelectMany(l => l.Added).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        return new TailorResult(pdf, $"tailor v1: {lines.Count} tech-stack line(s), {total} term(s) added from the posting");
+        return new TailorResult(pdf, $"tailor v1: {lines.Count} tech-stack line(s), {total} term(s) added from the posting" +
+                                     (movedTo is null ? "" : $"; location set to {movedTo}"));
     }
 
     /// <summary>

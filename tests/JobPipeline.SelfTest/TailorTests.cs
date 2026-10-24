@@ -74,6 +74,54 @@ public static class TailorTests
             return Task.CompletedTask;
         });
 
+        Test("location: cleans the posting's location to city, state; unusable ones give null", () =>
+        {
+            Eq("Boston, MA", ResumeLocation.Clean("Boston, MA (Hybrid)"));
+            Eq("New York, NY", ResumeLocation.Clean("New York, NY; Jersey City, NJ"));
+            Eq("New York, NY", ResumeLocation.Clean("New York, NY or Boston, MA"));
+            Eq("Austin, TX", ResumeLocation.Clean("Hybrid - Austin, TX, United States"));
+            Eq("Seattle, WA", ResumeLocation.Clean("Seattle, WA 98101, USA"));
+            Eq("Chicago, IL", ResumeLocation.Clean("Chicago, IL - Onsite"));
+            Eq<string?>(null, ResumeLocation.Clean("Remote, US"));
+            Eq<string?>(null, ResumeLocation.Clean("United States"));
+            Eq<string?>(null, ResumeLocation.Clean("Multiple Locations"));
+            Eq<string?>(null, ResumeLocation.Clean("  "));
+            return Task.CompletedTask;
+        });
+
+        Test("location: remote or unclear keeps home; on-site/hybrid uses the job's city; format applies", () =>
+        {
+            Job J(bool? remote, string? loc) => new() { Id = Guid.NewGuid(), Company = "A", Title = "B", IsRemote = remote, Location = loc };
+            Eq(("Irvine, CA", false), ResumeLocation.For(J(true, "New York, NY"), "Irvine, CA", null));
+            Eq(("Irvine, CA", false), ResumeLocation.For(J(null, "Remote - US"), "Irvine, CA", null));
+            Eq(("Irvine, CA", false), ResumeLocation.For(J(false, "United States"), "Irvine, CA", null));
+            Eq(("Irvine, CA", false), ResumeLocation.For(J(false, "Irvine, CA (Hybrid)"), "Irvine, CA", null));
+            Eq(("Boston, MA", true), ResumeLocation.For(J(false, "Boston, MA (Hybrid)"), "Irvine, CA", "{location}"));
+            Eq(("Austin, TX", true), ResumeLocation.For(J(null, "Austin, TX"), "Irvine, CA", null));
+            Eq(("Irvine, CA · Relocating to Boston, MA", true),
+                ResumeLocation.For(J(false, "Boston, MA"), "Irvine, CA", "{home} · Relocating to {location}"));
+            return Task.CompletedTask;
+        });
+
+        Test("location: tag replaced in the document (even split across runs); changed text highlighted", () =>
+        {
+            var dir = NewDir();
+            var template = Path.Combine(dir, "template.docx");
+            WriteDocx(template,
+                Para(Run("Jane Doe | jane@example.com | "), Run("{{LOCATION:Irv"), Run("ine, CA}}"), Run(" | linkedin")),
+                Para(Run("C#, SQL {{ADD_MISSING}}")));
+            var output = Path.Combine(dir, "out.docx");
+            var style = new AddedStyle(true, "FF0000");
+            DocxTemplate.AddMissing(template, output, _ => [], style, home => (home == "Irvine, CA" ? "Boston, MA" : "?", true));
+            Eq("Jane Doe | jane@example.com | Boston, MA | linkedin\nC#, SQL\n", DocxTemplate.ReadText(output).Replace("\r\n", "\n"));
+            Eq(1, CountOf(ReadBody(output), "w:val=\"FF0000\""), "changed location highlighted");
+
+            DocxTemplate.AddMissing(template, output, _ => [], style, home => (home, false));
+            Eq("Jane Doe | jane@example.com | Irvine, CA | linkedin\nC#, SQL\n", DocxTemplate.ReadText(output).Replace("\r\n", "\n"));
+            Eq(false, ReadBody(output).Contains("FF0000"), "unchanged location not highlighted");
+            return Task.CompletedTask;
+        });
+
         Test("tailor: nothing missing leaves the line as it was (tag removed)", () =>
         {
             var dir = NewDir();
@@ -103,6 +151,22 @@ public static class TailorTests
             Contains(text, "C#, .NET 8, SQL Server, Azure, Kubernetes");
             Contains(text, "C#, ASP.NET MVC, SQL Server, Azure, Kubernetes");
             Contains(result.Note ?? "", "2 tech-stack line(s), 2 term(s)");
+            Contains(text, "Irvine, CA");                                  // remote job keeps home
+            Eq(false, (result.Note ?? "").Contains("location"));
+        });
+
+        Test("tailor: on-site job puts its city on the resume; UpdateLocation=false keeps home", async () =>
+        {
+            var (dir, opts, job) = Setup();
+            job.IsRemote = false;
+            job.Location = "Boston, MA (Hybrid)";
+            var result = await new TechStackTailor(opts, new CopyConverter()).TailorAsync(new TailorRequest(job, "jd", dir), default);
+            Contains(DocxTemplate.ReadText(result.ResumePath), "Jane Doe | Boston, MA");
+            Contains(result.Note ?? "", "location set to Boston, MA");
+
+            opts.UpdateLocation = false;
+            result = await new TechStackTailor(opts, new CopyConverter()).TailorAsync(new TailorRequest(job, "jd", dir), default);
+            Contains(DocxTemplate.ReadText(result.ResumePath), "Jane Doe | Irvine, CA");
         });
 
         Test("tailor: file name pattern defaults, drops characters Windows forbids", () =>
@@ -166,6 +230,7 @@ public static class TailorTests
         var dir = NewDir();
         var template = Path.Combine(dir, "resume-template.docx");
         WriteDocx(template,
+            Para(Run("Jane Doe | {{LOCATION:Irvine, CA}}")),
             Para(Run("Senior Software Engineer, Company A")),
             Para(Run("C#, .NET 8, SQL Server {{ADD_MISSING}}", italic: true)),
             Para(Run("Software Developer, Company B")),
@@ -175,6 +240,7 @@ public static class TailorTests
         {
             Id = Guid.NewGuid(), Company = "Acme Inc.", Title = "Senior Backend Engineer",
             TechStack = ["C#", "Azure", "sql server", "Kubernetes"],
+            IsRemote = true, Location = "Remote, US",
         };
         return (dir, opts, job);
     }

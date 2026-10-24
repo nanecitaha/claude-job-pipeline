@@ -32,13 +32,20 @@ public static partial class DocxTemplate
     [GeneratedRegex(@"\{\{\s*ADD_MISSING\s*\}\}", RegexOptions.IgnoreCase)]
     public static partial Regex Tag();
 
+    /// <summary><c>{{LOCATION:Irvine, CA}}</c>: group 1 is your home location (the text used for remote jobs).</summary>
+    [GeneratedRegex(@"\{\{\s*LOCATION\s*(?::\s*([^}]*?))?\s*\}\}", RegexOptions.IgnoreCase)]
+    public static partial Regex LocationTag();
+
     /// <summary>
     /// Copies <paramref name="templatePath"/> to <paramref name="outputPath"/> and fills every tagged line.
     /// <paramref name="missing"/> gets the line's existing terms and returns the terms to append.
     /// Returns one result per tagged line, in document order.
     /// </summary>
+    /// <para><paramref name="location"/> (optional) gets the home location written in each <c>{{LOCATION:...}}</c> tag and
+    /// returns the text to show and whether it differs from home (changed text gets <paramref name="style"/>).</para>
     public static IReadOnlyList<AddedLine> AddMissing(
-        string templatePath, string outputPath, Func<IReadOnlyList<string>, IReadOnlyList<string>> missing, AddedStyle? style)
+        string templatePath, string outputPath, Func<IReadOnlyList<string>, IReadOnlyList<string>> missing, AddedStyle? style,
+        Func<string, (string Text, bool Changed)>? location = null)
     {
         if (!File.Exists(templatePath))
             throw new FileNotFoundException($"Resume template not found: '{templatePath}'.");
@@ -55,7 +62,10 @@ public static partial class DocxTemplate
             using (var s = entry.Open()) doc = XDocument.Load(s, LoadOptions.PreserveWhitespace);
 
             foreach (var p in doc.Descendants(W + "p").ToList())
+            {
+                if (location is not null) FillLocation(p, location, style);
                 if (FillParagraph(p, missing, style) is { } line) results.Add(line);
+            }
 
             entry.Delete();
             using var o = zip.CreateEntry(BodyPart, CompressionLevel.Optimal).Open();
@@ -137,6 +147,34 @@ public static partial class DocxTemplate
         run.AddAfterSelf(newRuns);
 
         return new AddedLine(existing, added);
+    }
+
+    static void FillLocation(XElement p, Func<string, (string Text, bool Changed)> location, AddedStyle? style)
+    {
+        var nodes = TextNodes(p).ToList();
+        if (nodes.Count == 0) return;
+        var matches = LocationTag().Matches(string.Concat(nodes.Select(n => n.Value)));
+        if (matches.Count == 0) return;
+
+        var starts = Starts(nodes);
+        foreach (var m in matches.Reverse())   // right to left keeps earlier positions valid
+        {
+            var home = m.Groups[1].Success ? m.Groups[1].Value.Trim() : "";
+            var (text, changed) = location(home);
+            var (node, offset) = RemoveRange(nodes, starts, m.Index, m.Length);
+            var at = nodes[node];
+            if (!changed || style is null)
+            {
+                Set(at, at.Value[..offset] + text + at.Value[offset..]);
+                continue;
+            }
+            var run = at.Parent!;   // w:r
+            var tail = at.Value[offset..];
+            Set(at, at.Value[..offset]);
+            var newRuns = new List<XElement> { CloneRun(run, text, style) };
+            if (tail.Length > 0) newRuns.Add(CloneRun(run, tail, null));
+            run.AddAfterSelf(newRuns);
+        }
     }
 
     // Text nodes that belong to this paragraph (not to a paragraph nested inside it, e.g. in a text box).

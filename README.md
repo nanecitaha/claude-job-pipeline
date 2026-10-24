@@ -135,6 +135,10 @@ PDF shows:   C#, .NET, RabbitMQ, SQL Server, Azure, Kubernetes     (added terms 
   ```
   The file name comes from `Pipeline:ResumeFileName` (e.g. `Jane_Doe_Resume`; employers see it). The folder keeps
   jobs apart, so every job can use the same name. `{job}` in the name is replaced with company-title if you want it.
+- **Location:** type `{{LOCATION:Irvine, CA}}` (your own city) where your location goes. Remote jobs, and jobs
+  whose location is unclear, keep it; on-site and hybrid jobs show the job's city and state instead (e.g.
+  `Boston, MA (Hybrid)` → `Boston, MA`), highlighted like added terms. `Pipeline:UpdateLocation: false` turns this
+  off; `Pipeline:LocationFormat` sets the wording, e.g. `"{home} · Relocating to {location}"`.
 - Changed the template or settings? Ask Claude to *"re-tailor all ready jobs"* (or name specific ones): they go
   back to the worker for a fresh resume.
 
