@@ -43,7 +43,7 @@ err, msg = call("add_jobs", {"jobs": [{"source": "x", "company": "", "title": "t
 print("invalid job:", msg["results"][0]["result"], "-", msg["results"][0]["error"])
 
 # Worker runs as its own process against the same folder.
-env = dict(os.environ, Pipeline__DataDir=D, Pipeline__MasterResumePath=os.path.join(S, "master.pdf"), Pipeline__PollSeconds="5")
+env = dict(os.environ, Pipeline__Tailor="CopyMaster", Pipeline__DataDir=D, Pipeline__MasterResumePath=os.path.join(S, "master.pdf"), Pipeline__PollSeconds="5")
 worker = subprocess.Popen(["dotnet", os.path.join("src","JobPipeline.Worker","bin","Debug","net8.0","JobPipeline.Worker.dll")], env=env,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 for _ in range(60):

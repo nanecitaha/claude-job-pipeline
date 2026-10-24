@@ -12,6 +12,18 @@ public sealed class PipelineOptions
     public int MaxTailorAttempts { get; set; } = 3;
     /// <summary>A Tailoring claim older than this is assumed dead (crashed worker) and reclaimed.</summary>
     public int StaleClaimMinutes { get; set; } = 30;
+
+    /// <summary>Which tailor runs: "TechStack" (v1: fills tech-stack lines, saves PDF) or "CopyMaster" (copies the master resume).</summary>
+    public string Tailor { get; set; } = "CopyMaster";
+    /// <summary>Your resume as a Word .docx with {{TECH_STACK:role}} placeholders (TechStack tailor).</summary>
+    public string ResumeTemplatePath { get; set; } = "";
+    /// <summary>"Word" (Microsoft Word, needs a logged-in session) or "LibreOffice" (headless, works on servers).</summary>
+    public string PdfConverter { get; set; } = "Word";
+    /// <summary>Full path to soffice(.exe). Empty = default install location.</summary>
+    public string LibreOfficePath { get; set; } = "";
+    public int ConversionTimeoutSeconds { get; set; } = 120;
+    /// <summary>Keep the filled .docx next to the PDF (handy while testing the template).</summary>
+    public bool KeepDocx { get; set; }
 }
 
 public sealed record TailorRequest(Job Job, string JdText, string OutputDir);
@@ -40,7 +52,7 @@ public sealed class CopyMasterResumeTailor(PipelineOptions options) : ITailor
             throw new FileNotFoundException($"Master resume not found: '{master}'. Set Pipeline:MasterResumePath in appsettings.json.");
 
         var job = request.Job;
-        var name = $"{Slug(job.Company)}-{Slug(job.Title)}-{job.Id.ToString()[..8]}";
+        var name = ResumeFiles.BaseName(job);
         var resume = Path.Combine(request.OutputDir, name + Path.GetExtension(master));
         File.Copy(master, resume, overwrite: true);
 
@@ -49,12 +61,5 @@ public sealed class CopyMasterResumeTailor(PipelineOptions options) : ITailor
                 string.Join(", ", job.TechStack), ct);
 
         return new TailorResult(resume, "placeholder: master resume copied, not tailored");
-    }
-
-    static string Slug(string s)
-    {
-        var chars = s.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
-        var slug = string.Join('-', new string(chars).Split('-', StringSplitOptions.RemoveEmptyEntries));
-        return slug.Length > 40 ? slug[..40].TrimEnd('-') : slug;
     }
 }

@@ -61,12 +61,12 @@ because it may already have been submitted.
 1. **.NET 8 SDK**: `winget install Microsoft.DotNet.SDK.8`
 2. **Build**, from the repo folder:
    ```powershell
-   dotnet run --project tests\JobPipeline.SelfTest            # 18 checks, should all pass
+   dotnet run --project tests\JobPipeline.SelfTest            # 24 checks (LibreOffice one skipped if not installed)
    python tests\e2e\mcp_e2e.py                                # MCP + worker end to end
    dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
    dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
    ```
-3. **Master resume**: save it as `C:\JobPipeline\master-resume.pdf` (or change the path in
+3. **Resume**: set up the tailor (see [Tailoring](#tailoring)); for `CopyMaster`, save it as `C:\JobPipeline\master-resume.pdf` (or change the path in
    `C:\JobPipeline\bin\worker\appsettings.json`, which also sets the data folder `C:\JobPipeline\data`).
 4. **Connect Claude desktop**: add this to `claude_desktop_config.json` (Claude desktop's developer settings
    open it), then fully quit and reopen the app:
@@ -94,10 +94,45 @@ because it may already have been submitted.
 Checking on things from chat: "what's blocked on me?" (`list_jobs` ActionNeeded), "I applied to Acme myself"
 (`resolve_action` applied), "retry the Globex one" (`resolve_action` retry), "pipeline stats".
 
-## Bring your own tailoring
+## Tailoring
 
-`CopyMasterResumeTailor` is a stand-in that copies the master resume per job, so the pipeline runs end to end
-today. Replace it with your own `ITailor`:
+The worker runs one tailor, chosen with `Pipeline:Tailor` in `appsettings.json`:
+
+| `Tailor`     | What it does                                                                               |
+|--------------|--------------------------------------------------------------------------------------------|
+| `TechStack`  | **v1 (test).** Fills each role's tech-stack line in your Word resume, then saves a PDF.     |
+| `CopyMaster` | Copies `MasterResumePath` unchanged (no tailoring).                                        |
+
+### Tech-stack tailor (v1)
+
+For each job it takes your stack for each role, appends every term from the job's tech stack (as stored by the
+hunt) that the role doesn't already list, and writes the result into your resume:
+
+- Your terms stay first, in your order; posting terms are appended in the posting's own spelling.
+- Matching ignores case only: `c#` = `C#`, but `.NET 8` and `.NET8` are different terms.
+- Next to each PDF, `<name>.tech-added.txt` lists exactly what was added per role.
+
+> v1 adds **every** missing posting term, including ones you may not have. Use it to test the pipeline; don't
+> send these resumes on real applications until relevance filtering exists.
+
+Setup:
+
+1. **Template**: save your resume as `C:\JobPipeline\resume-template.docx`. Where each role's tech stack goes,
+   type a placeholder, e.g. `Tech stack: {{TECH_STACK:role1}}`. Formatting of the line is kept.
+2. **Your stack**: edit `MyTechStack` at the top of `src/JobPipeline.Worker/TechStackTailor.cs`, one entry per
+   placeholder key (`role1`, `role2`, ...). Rebuild/publish the worker after editing.
+3. **PDF converter**: `Pipeline:PdfConverter`
+   - `Word`: Microsoft Word starts hidden for each resume, converts, and quits (a few seconds; no window).
+     Needs a logged-in session, so run the worker from a console or a scheduled task set to
+     *Run only when user is logged on*, not as a service. Open Word by hand once first.
+   - `LibreOffice`: headless and free; works on a server with nobody logged in.
+     Install it, or set `Pipeline:LibreOfficePath` to `soffice.exe`.
+4. `Pipeline:KeepDocx: true` keeps the filled `.docx` next to the PDF while you tune the template.
+
+Errors (template missing, a placeholder with no `MyTechStack` entry, no placeholders, conversion failure) fail
+the attempt with the reason in the job's `lastError`; after `MaxTailorAttempts` the job goes to `Failed`.
+
+### Bring your own tailor
 
 ```csharp
 public interface ITailor
@@ -107,16 +142,14 @@ public interface ITailor
 }
 ```
 
-and swap the registration in `src/JobPipeline.Worker/Program.cs`. Recommended shape: a `resume.json` bullet bank
-with ids and skill tags → model returns bullet ids, order and wording → a plain-code validator rejects any tech
-term or claim not in the bank → render PDF/DOCX.
+Add your class and a case for it in the `Pipeline:Tailor` switch in `src/JobPipeline.Worker/Program.cs`.
 
 ## Layout
 
 ```
 src/JobPipeline.Core     JobStore (lock, atomic writes, state machine), models, dedupe
 src/JobPipeline.Mcp      stdio MCP server: 13 tools + config files
-src/JobPipeline.Worker   tailoring BackgroundService + ITailor
+src/JobPipeline.Worker   tailoring BackgroundService, ITailor, tech-stack tailor (v1), Word/LibreOffice PDF
 tests/JobPipeline.SelfTest   dependency-free tests: transitions, crash recovery, dedupe, concurrency
 tests/e2e                    MCP stdio + worker processes end to end (CI runs both on Windows and Linux)
 skills/                  job-hunt, job-apply, job-email-sync

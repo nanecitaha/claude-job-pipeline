@@ -264,6 +264,10 @@ Test("database file and job descriptions live in the data folder", () =>
     Eq("We need C# and .NET 8.", s.ReadJd(s.GetJob(id)!));
 });
 
+var (tailorPassed, tailorFailed) = TailorTests.Run();
+passed += tailorPassed;
+failures += tailorFailed;
+
 Console.WriteLine($"\n{passed} passed, {failures} failed");
 return failures == 0 ? 0 : 1;
 
