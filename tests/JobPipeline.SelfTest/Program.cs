@@ -304,6 +304,37 @@ Test("re-tailor: ReadyToApply / ActionNeeded / Failed go back to New with the re
     Throws<PipelineException>(() => s.RequeueForTailoring(id), "needs ReadyToApply or ActionNeeded or Failed");
 });
 
+Test("database: resume_path and resume_dir are real columns, set by the worker and cleared on re-tailor", () =>
+{
+    var dir = NewDir();
+    var s = new JobStore(dir);
+    var id = s.AddJob(Posting()).Id;
+    s.ClaimForTailoring(TimeSpan.FromMinutes(30));
+    var pdf = Path.Combine(dir, "resumes", "acme-x", "Jane_Doe_Resume.pdf");
+    s.CompleteTailoring(id, pdf);
+    Eq(((string?)pdf, Path.GetDirectoryName(pdf)), ResumeColumns(s, id));
+    s.RequeueForTailoring(id);
+    Eq(((string?)null, (string?)null), ResumeColumns(s, id));
+});
+
+Test("database: an older database without the resume columns is upgraded and backfilled", () =>
+{
+    var dir = NewDir();
+    var s = new JobStore(dir);
+    var id = ReadyJob(s);
+    using (var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={s.DatabasePath}"))
+    {
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "ALTER TABLE jobs DROP COLUMN resume_path; ALTER TABLE jobs DROP COLUMN resume_dir; " +
+                          "UPDATE meta SET value = '1' WHERE key = 'schema_version';";
+        cmd.ExecuteNonQuery();
+    }
+    var reopened = new JobStore(dir);
+    Eq(((string?)"/tmp/resume.pdf", Path.GetDirectoryName("/tmp/resume.pdf")), ResumeColumns(reopened, id));
+    Eq(JobStatus.ReadyToApply, reopened.GetJob(id)!.Status);
+});
+
 var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;
@@ -318,6 +349,18 @@ Guid ReadyJob(JobStore s, string company = "Acme Inc.", string url = "https://bu
         if (j.Id == id) break;
     s.CompleteTailoring(id, "/tmp/resume.pdf");
     return id;
+}
+
+static (string?, string?) ResumeColumns(JobStore s, Guid id)
+{
+    using var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={s.DatabasePath};Mode=ReadOnly");
+    c.Open();
+    using var cmd = c.CreateCommand();
+    cmd.CommandText = "SELECT resume_path, resume_dir FROM jobs WHERE id = $id";
+    cmd.Parameters.AddWithValue("$id", id.ToString());
+    using var r = cmd.ExecuteReader();
+    r.Read();
+    return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1));
 }
 
 sealed class ManualClock(DateTimeOffset start) : TimeProvider

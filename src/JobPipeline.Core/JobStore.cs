@@ -465,6 +465,8 @@ public sealed class JobStore
                     date_posted     TEXT,
                     date_applied    TEXT,
                     interview_date  TEXT,
+                    resume_path     TEXT,
+                    resume_dir      TEXT,
                     created_at      TEXT NOT NULL,
                     updated_at      TEXT NOT NULL,
                     doc             TEXT NOT NULL
@@ -480,11 +482,34 @@ public sealed class JobStore
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
+                INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2');
                 """);
+            MigrateResumeColumns(conn, tx);
             ImportLegacyJson(conn, tx);
             tx.Commit();
         }
+    }
+
+    /// <summary>
+    /// Schema v2: resume_path / resume_dir as real columns (previously only inside the JSON doc). Adds them to an
+    /// older database and fills them in from each job's document.
+    /// </summary>
+    static void MigrateResumeColumns(SqliteConnection conn, SqliteTransaction tx)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "PRAGMA table_info(jobs)";
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) columns.Add(r.GetString(1));
+        }
+        if (columns.Contains("resume_path") && columns.Contains("resume_dir")) return;
+        if (!columns.Contains("resume_path")) Exec(conn, tx, "ALTER TABLE jobs ADD COLUMN resume_path TEXT");
+        if (!columns.Contains("resume_dir")) Exec(conn, tx, "ALTER TABLE jobs ADD COLUMN resume_dir TEXT");
+        foreach (var job in LoadAll(conn, tx).Jobs)
+            Upsert(conn, tx, job, JsonSerializer.Serialize(job, Compact));
+        Exec(conn, tx, "UPDATE meta SET value = '2' WHERE key = 'schema_version'");
     }
 
     /// <summary>
@@ -535,15 +560,17 @@ public sealed class JobStore
         cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO jobs (id, status, company, title, source, dedupe_key, external_job_id, listing_url, apply_url,
-                              is_remote, is_easy_apply, date_posted, date_applied, interview_date, created_at, updated_at, doc)
+                              is_remote, is_easy_apply, date_posted, date_applied, interview_date, resume_path, resume_dir,
+                              created_at, updated_at, doc)
             VALUES ($id, $status, $company, $title, $source, $dedupe, $ext, $listing, $apply,
-                    $remote, $easy, $posted, $applied, $interview, $created, $updated, $doc)
+                    $remote, $easy, $posted, $applied, $interview, $resume, $resumeDir, $created, $updated, $doc)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status, company = excluded.company, title = excluded.title, source = excluded.source,
                 dedupe_key = excluded.dedupe_key, external_job_id = excluded.external_job_id,
                 listing_url = excluded.listing_url, apply_url = excluded.apply_url, is_remote = excluded.is_remote,
                 is_easy_apply = excluded.is_easy_apply, date_posted = excluded.date_posted,
                 date_applied = excluded.date_applied, interview_date = excluded.interview_date,
+                resume_path = excluded.resume_path, resume_dir = excluded.resume_dir,
                 updated_at = excluded.updated_at, doc = excluded.doc
             """;
         Add(cmd, "$id", j.Id.ToString());
@@ -560,6 +587,8 @@ public sealed class JobStore
         Add(cmd, "$posted", j.DatePosted);
         Add(cmd, "$applied", j.DateApplied?.ToString("O"));
         Add(cmd, "$interview", j.InterviewDate?.ToString("O"));
+        Add(cmd, "$resume", j.ResumePath);
+        Add(cmd, "$resumeDir", string.IsNullOrWhiteSpace(j.ResumePath) ? null : Path.GetDirectoryName(j.ResumePath));
         Add(cmd, "$created", j.CreatedAt.ToUniversalTime().ToString("O"));
         Add(cmd, "$updated", j.UpdatedAt.ToUniversalTime().ToString("O"));
         Add(cmd, "$doc", doc);
