@@ -61,12 +61,12 @@ because it may already have been submitted.
 1. **.NET 8 SDK**: `winget install Microsoft.DotNet.SDK.8`
 2. **Build**, from the repo folder:
    ```powershell
-   dotnet run --project tests\JobPipeline.SelfTest            # 18 checks, should all pass
+   dotnet run --project tests\JobPipeline.SelfTest            # 24 checks (LibreOffice one skipped if not installed)
    python tests\e2e\mcp_e2e.py                                # MCP + worker end to end
    dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
    dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
    ```
-3. **Master resume**: save it as `C:\JobPipeline\master-resume.pdf` (or change the path in
+3. **Resume**: set up the tailor (see [Tailoring](#tailoring)); for `CopyMaster`, save it as `C:\JobPipeline\master-resume.pdf` (or change the path in
    `C:\JobPipeline\bin\worker\appsettings.json`, which also sets the data folder `C:\JobPipeline\data`).
 4. **Connect Claude desktop**: add this to `claude_desktop_config.json` (Claude desktop's developer settings
    open it), then fully quit and reopen the app:
@@ -81,10 +81,18 @@ because it may already have been submitted.
    }
    ```
    First start creates `C:\JobPipeline\data` with `hunt-config.md` and `applicant-profile.md`.
-5. **Fill the configs**: every `[fill]` in `applicant-profile.md` (apply refuses to run until they're done), and
-   your site search URLs in `hunt-config.md`. builtin is already listed first.
+5. **Fill the configs** in the data folder:
+   - `applicant-profile.md`: every `[fill]` (apply refuses to run until they're done).
+   - `resume.md`: paste your **master** (untailored) resume as plain text or Markdown. After the profile, it's
+     Claude's source for work history and "years of experience with X" questions. Only list what you'd defend
+     in an interview. It stays in your data folder; don't commit it.
+   - `hunt-config.md`: your site search URLs (builtin is already listed first), and the **Manual-apply
+     companies** list (FAANG etc. by default). Jobs there are still found and tailored, but never auto-applied:
+     they go to ActionNeeded with the resume path so you apply yourself. Edits take effect on the next apply run.
 6. **Run the worker** so it survives reboots: Task Scheduler → Create Task → trigger "At startup" →
-   action `C:\JobPipeline\bin\worker\JobPipeline.Worker.exe`, "Run whether user is logged on or not".
+   action `C:\JobPipeline\bin\worker\JobPipeline.Worker.exe`. With `PdfConverter: Word`, choose
+   "Run only when user is logged on" (Word needs a logged-in session); with `LibreOffice`, "Run whether user is
+   logged on or not" works. For a quick test, just run the exe in a console.
    (Or as a real Windows Service: add `Microsoft.Extensions.Hosting.WindowsServices`, uncomment
    `AddWindowsService` in `Program.cs`, then `sc create`.)
 7. **Skills**: save `skills/job-hunt`, `skills/job-apply`, `skills/job-email-sync` in Claude.
@@ -94,10 +102,71 @@ because it may already have been submitted.
 Checking on things from chat: "what's blocked on me?" (`list_jobs` ActionNeeded), "I applied to Acme myself"
 (`resolve_action` applied), "retry the Globex one" (`resolve_action` retry), "pipeline stats".
 
-## Bring your own tailoring
+## Tailoring
 
-`CopyMasterResumeTailor` is a stand-in that copies the master resume per job, so the pipeline runs end to end
-today. Replace it with your own `ITailor`:
+The worker runs one tailor, chosen with `Pipeline:Tailor` in `appsettings.json`:
+
+| `Tailor`     | What it does                                                                               |
+|--------------|--------------------------------------------------------------------------------------------|
+| `TechStack`  | **v1 (test).** Adds the job's missing tech terms to your resume's tech lines, saves a PDF. |
+| `CopyMaster` | Copies `MasterResumePath` unchanged (no tailoring).                                        |
+
+### Tech-stack tailor (v1)
+
+Keeps your resume's tech-stack lines as they are and appends the job's tech-stack terms (as stored by the hunt)
+that each line is missing:
+
+```
+Your line:   C#, .NET, RabbitMQ, SQL Server {{ADD_MISSING}}
+Job wants:   C#, Azure, Kubernetes
+PDF shows:   C#, .NET, RabbitMQ, SQL Server, Azure, Kubernetes     (added terms in red bold)
+```
+
+- Your terms stay exactly as written; posting terms are appended in the posting's own spelling.
+- Matching ignores case only: `c#` = `C#`, but `.NET 8` and `.NET8` are different terms.
+- Added terms are **bold and red** while `Pipeline:HighlightAddedTerms` is `true`, so they're easy to spot in
+  test PDFs. `HighlightColor` sets the color (hex, `FF0000` = red) and `HighlightFontSize` the size in points
+  (e.g. `10.5`; `0` = same as the line). Set `HighlightAddedTerms` to `false` for normal-looking output.
+- Each job gets its own folder under `data\resumes\`:
+  ```
+  resumes\draftkings-senior-platform-engineer-2c0453c6\
+    Resume.pdf
+    techstack.txt        <- the job's tech stack as captured by the hunt, one comma-separated line
+  ```
+  The file name comes from `Pipeline:ResumeFileName` (e.g. `Jane_Doe_Resume`; employers see it). The folder keeps
+  jobs apart, so every job can use the same name. `{job}` in the name is replaced with company-title if you want it.
+- **Location:** type `{{LOCATION:Irvine, CA}}` (your own city) where your location goes. Remote jobs, and jobs
+  whose location is unclear, keep it; on-site and hybrid jobs show the job's city and state instead (e.g.
+  `Boston, MA (Hybrid)` → `Boston, MA`), highlighted like added terms. `Pipeline:UpdateLocation: false` turns this
+  off; `Pipeline:LocationFormat` sets the wording, e.g. `"{home} · Relocating to {location}"`.
+- Changed the template or settings? Ask Claude to *"re-tailor all ready jobs"* (or name specific ones): they go
+  back to the worker for a fresh resume.
+
+> v1 adds **every** missing posting term, including ones you may not have. Use it to test the pipeline; don't
+> send these resumes on real applications until relevance filtering exists.
+
+Setup:
+
+1. **Template**: open your resume in Word and type `{{ADD_MISSING}}` at the **end** of each tech-stack line
+   (keep the line itself). Save it as `C:\JobPipeline\resume-template.docx`. No code changes needed.
+2. **PDF converter**: `Pipeline:PdfConverter`
+   - `Word`: Microsoft Word starts hidden for each resume, converts, and quits (a few seconds; no window).
+     Needs a logged-in session, so run the worker from a console or a scheduled task set to
+     *Run only when user is logged on*, not as a service. Open Word by hand once first.
+   - `LibreOffice`: headless and free; works on a server with nobody logged in.
+     Install it, or set `Pipeline:LibreOfficePath` to `soffice.exe`.
+3. `Pipeline:KeepDocx: true` keeps the filled `.docx` next to the PDF while you tune the template.
+4. **Personal settings** (your name in `ResumeFileName`, other paths): put them in
+   `C:\JobPipeline\bin\worker\appsettings.Local.json`, which overrides `appsettings.json`, isn't in the repo,
+   and survives re-publishing:
+   ```json
+   { "Pipeline": { "ResumeFileName": "Jane_Doe_Resume" } }
+   ```
+
+Errors (template missing, no `{{ADD_MISSING}}` tags, conversion failure) fail the attempt with the reason in the
+job's `lastError`; after `MaxTailorAttempts` the job goes to `Failed`.
+
+### Bring your own tailor
 
 ```csharp
 public interface ITailor
@@ -107,22 +176,20 @@ public interface ITailor
 }
 ```
 
-and swap the registration in `src/JobPipeline.Worker/Program.cs`. Recommended shape: a `resume.json` bullet bank
-with ids and skill tags → model returns bullet ids, order and wording → a plain-code validator rejects any tech
-term or claim not in the bank → render PDF/DOCX.
+Add your class and a case for it in the `Pipeline:Tailor` switch in `src/JobPipeline.Worker/Program.cs`.
 
 ## Layout
 
 ```
 src/JobPipeline.Core     JobStore (lock, atomic writes, state machine), models, dedupe
 src/JobPipeline.Mcp      stdio MCP server: 13 tools + config files
-src/JobPipeline.Worker   tailoring BackgroundService + ITailor
+src/JobPipeline.Worker   tailoring BackgroundService, ITailor, tech-stack tailor (v1), Word/LibreOffice PDF
 tests/JobPipeline.SelfTest   dependency-free tests: transitions, crash recovery, dedupe, concurrency
 tests/e2e                    MCP stdio + worker processes end to end (CI runs both on Windows and Linux)
 skills/                  job-hunt, job-apply, job-email-sync
 ```
 
-Data folder: `jobs.db` (+ its `-wal`/`-shm` files), `resumes/`, `hunt-config.md`, `applicant-profile.md`.
+Data folder: `jobs.db` (+ its `-wal`/`-shm` files), `resumes/`, `hunt-config.md`, `applicant-profile.md`, `resume.md`.
 Browse it with any SQLite tool (DB Browser for SQLite, `sqlite3`); for edits, stop the worker and Claude first or
 go through the MCP tools. Back it up with `sqlite3 jobs.db ".backup jobs-backup.db"` (safe while running).
 Upgrading from the earlier `jobs.json` store: the first start imports it and renames it `jobs.json.imported`.

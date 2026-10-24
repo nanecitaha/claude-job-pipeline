@@ -264,6 +264,99 @@ Test("database file and job descriptions live in the data folder", () =>
     Eq("We need C# and .NET 8.", s.ReadJd(s.GetJob(id)!));
 });
 
+Test("manual-apply: company matching covers suffixes and longer names, not longer words", () =>
+{
+    Eq(true, Dedupe.CompanyMatches("Google LLC", "Google"));
+    Eq(true, Dedupe.CompanyMatches("Amazon Web Services, Inc.", "Amazon"));
+    Eq(true, Dedupe.CompanyMatches("Meta Platforms, Inc.", "meta"));
+    Eq(false, Dedupe.CompanyMatches("Metabase", "Meta"));
+    Eq(false, Dedupe.CompanyMatches("Applied Materials", "Apple"));
+    Eq(false, Dedupe.CompanyMatches("Acme", ""));
+});
+
+Test("manual-apply: listed companies are handed to the user, never started", () =>
+{
+    var s = new JobStore(NewDir());
+    var google = ReadyJob(s, "Google LLC", "https://g/1");
+    var acme = ReadyJob(s, "Acme Inc.", "https://a/1");
+    var list = new[] { "Google", "Meta" };
+    Throws<PipelineException>(() => s.StartApply(google, list), "manual-apply");
+    var run = s.BeginApplyRun(10, list);
+    Eq(1, run.ManualApply.Count);
+    Eq(google, run.ManualApply[0].Id);
+    Eq(JobStatus.ActionNeeded, s.GetJob(google)!.Status);
+    if (!s.GetJob(google)!.ActionDesc!.Contains("/tmp/resume.pdf")) throw new Exception("resume path missing from handover");
+    Eq(acme, run.Ready.Single().Id);
+    Eq(JobStatus.Applied, s.ResolveAction(google, ResolveOutcome.Applied, "applied myself").Status);
+});
+
+Test("re-tailor: ReadyToApply / ActionNeeded / Failed go back to New with the resume cleared", () =>
+{
+    var s = new JobStore(NewDir());
+    var id = ReadyJob(s);
+    var j = s.RequeueForTailoring(id);
+    Eq(JobStatus.New, j.Status);
+    Eq<string?>(null, j.ResumePath);
+    Eq(0, j.TailorAttempts);
+    Eq(id, s.ClaimForTailoring(TimeSpan.FromMinutes(30))!.Id);
+    s.CompleteTailoring(id, "/tmp/new.pdf");
+    s.StartApply(id); s.MarkApplied(id);
+    Throws<PipelineException>(() => s.RequeueForTailoring(id), "needs ReadyToApply or ActionNeeded or Failed");
+});
+
+Test("database: resume_path and resume_dir are real columns, set by the worker and cleared on re-tailor", () =>
+{
+    var dir = NewDir();
+    var s = new JobStore(dir);
+    var id = s.AddJob(Posting()).Id;
+    s.ClaimForTailoring(TimeSpan.FromMinutes(30));
+    var pdf = Path.Combine(dir, "resumes", "acme-x", "Jane_Doe_Resume.pdf");
+    s.CompleteTailoring(id, pdf);
+    Eq(((string?)pdf, Path.GetDirectoryName(pdf)), ResumeColumns(s, id));
+    s.RequeueForTailoring(id);
+    Eq(((string?)null, (string?)null), ResumeColumns(s, id));
+});
+
+Test("database: an older database without the resume columns is upgraded and backfilled", () =>
+{
+    var dir = NewDir();
+    var s = new JobStore(dir);
+    var id = ReadyJob(s);
+    using (var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={s.DatabasePath}"))
+    {
+        c.Open();
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "ALTER TABLE jobs DROP COLUMN resume_path; ALTER TABLE jobs DROP COLUMN resume_dir; " +
+                          "UPDATE meta SET value = '1' WHERE key = 'schema_version';";
+        cmd.ExecuteNonQuery();
+    }
+    var reopened = new JobStore(dir);
+    Eq(((string?)"/tmp/resume.pdf", Path.GetDirectoryName("/tmp/resume.pdf")), ResumeColumns(reopened, id));
+    Eq(JobStatus.ReadyToApply, reopened.GetJob(id)!.Status);
+});
+
+Test("tech stack update: replaces the list; re-queues unapplied tailored jobs, leaves applied ones", () =>
+{
+    var s = new JobStore(NewDir());
+    var ready = ReadyJob(s);
+    var (job, requeued) = s.UpdateTechStack(ready, ["C#.NET", "Bazel/Pants/Buck", " ", "C#.NET", "unit testing"]);
+    Eq("C#.NET|Bazel/Pants/Buck|unit testing", string.Join("|", job.TechStack));
+    Eq(true, requeued);
+    Eq(JobStatus.New, job.Status);
+    Eq<string?>(null, job.ResumePath);
+
+    var applied = ReadyJob(s, "Beta LLC", "https://builtin.com/job/b");
+    s.StartApply(applied); s.MarkApplied(applied);
+    var (after, requeuedApplied) = s.UpdateTechStack(applied, ["Go"]);
+    Eq(false, requeuedApplied);
+    Eq(JobStatus.Applied, after.Status);
+    Eq("Go", string.Join("|", after.TechStack));
+});
+
+var (tailorPassed, tailorFailed) = TailorTests.Run();
+passed += tailorPassed;
+failures += tailorFailed;
+
 Console.WriteLine($"\n{passed} passed, {failures} failed");
 return failures == 0 ? 0 : 1;
 
@@ -274,6 +367,18 @@ Guid ReadyJob(JobStore s, string company = "Acme Inc.", string url = "https://bu
         if (j.Id == id) break;
     s.CompleteTailoring(id, "/tmp/resume.pdf");
     return id;
+}
+
+static (string?, string?) ResumeColumns(JobStore s, Guid id)
+{
+    using var c = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={s.DatabasePath};Mode=ReadOnly");
+    c.Open();
+    using var cmd = c.CreateCommand();
+    cmd.CommandText = "SELECT resume_path, resume_dir FROM jobs WHERE id = $id";
+    cmd.Parameters.AddWithValue("$id", id.ToString());
+    using var r = cmd.ExecuteReader();
+    r.Read();
+    return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1));
 }
 
 sealed class ManualClock(DateTimeOffset start) : TimeProvider

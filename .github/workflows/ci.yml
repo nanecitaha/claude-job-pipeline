@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install LibreOffice (real PDF conversion test)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libreoffice-writer-nogui
       - name: Build
         run: dotnet build JobPipeline.sln
       - name: Self-test (store, state machine, concurrency)

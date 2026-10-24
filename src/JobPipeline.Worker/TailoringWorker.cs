@@ -14,7 +14,8 @@ public sealed class TailoringWorker(JobStore store, ITailor tailor, IOptions<Pip
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        log.LogInformation("Tailoring worker started. Data folder: {Dir}", store.DataDir);
+        log.LogInformation("Tailoring worker started. Data folder: {Dir}. Tailor: {Tailor}{Converter}.",
+            store.DataDir, tailor.GetType().Name, tailor is TechStackTailor ? $" (PDF via {_o.PdfConverter})" : "");
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(5, _o.PollSeconds)));
         do
         {
@@ -35,7 +36,7 @@ public sealed class TailoringWorker(JobStore store, ITailor tailor, IOptions<Pip
         var job = store.ClaimForTailoring(TimeSpan.FromMinutes(_o.StaleClaimMinutes));
         if (job is null) return false;
 
-        log.LogInformation("Tailoring {Company} – {Title} ({Id}), attempt {Attempt}", job.Company, job.Title, job.Id, job.TailorAttempts);
+        log.LogInformation("Tailoring {Company} - {Title} ({Id}), attempt {Attempt}", job.Company, job.Title, job.Id, job.TailorAttempts);
         try
         {
             var jd = store.ReadJd(job);
@@ -48,7 +49,7 @@ public sealed class TailoringWorker(JobStore store, ITailor tailor, IOptions<Pip
                 throw new InvalidOperationException($"Tailor returned a path that does not exist: {result.ResumePath}");
 
             store.CompleteTailoring(job.Id, Path.GetFullPath(result.ResumePath), result.Note);
-            log.LogInformation("Ready to apply: {Company} – {Title} → {Resume}", job.Company, job.Title, result.ResumePath);
+            log.LogInformation("Ready to apply: {Company} - {Title} -> {Resume}", job.Company, job.Title, result.ResumePath);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

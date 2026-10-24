@@ -39,6 +39,18 @@ public static partial class Dedupe
         return string.Join(' ', string.Join(' ', words).Split(' ', StringSplitOptions.RemoveEmptyEntries));
     }
 
+    /// <summary>
+    /// True when a job's company is the listed company: same normalized name, or the listed name followed by more
+    /// words ("Amazon" matches "Amazon Web Services", "Meta" matches "Meta Platforms, Inc."), but not a longer word
+    /// ("Meta" does not match "Metabase").
+    /// </summary>
+    public static bool CompanyMatches(string jobCompany, string listed)
+    {
+        var j = Company(jobCompany);
+        var e = Company(listed);
+        return e.Length > 0 && (j == e || j.StartsWith(e + " ", StringComparison.Ordinal));
+    }
+
     /// <summary>0..1 similarity of two titles by shared words; used to match emails to jobs.</summary>
     public static double TitleSimilarity(string a, string b)
     {
