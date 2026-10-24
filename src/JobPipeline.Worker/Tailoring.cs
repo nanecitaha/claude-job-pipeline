@@ -28,6 +28,8 @@ public sealed class PipelineOptions
     public bool HighlightAddedTerms { get; set; } = true;
     /// <summary>Color for added terms as hex RGB (FF0000 = red).</summary>
     public string HighlightColor { get; set; } = "FF0000";
+    /// <summary>Font size in points for added terms (e.g. 10 or 10.5). 0 = same size as the line.</summary>
+    public double HighlightFontSize { get; set; }
 }
 
 public sealed record TailorRequest(Job Job, string JdText, string OutputDir);

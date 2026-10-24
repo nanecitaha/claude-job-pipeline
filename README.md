@@ -124,8 +124,9 @@ PDF shows:   C#, .NET, RabbitMQ, SQL Server, Azure, Kubernetes     (added terms 
 
 - Your terms stay exactly as written; posting terms are appended in the posting's own spelling.
 - Matching ignores case only: `c#` = `C#`, but `.NET 8` and `.NET8` are different terms.
-- Added terms are **bold and red** while `Pipeline:HighlightAddedTerms` is `true` (color: `HighlightColor`),
-  so they're easy to spot in test PDFs. Set it to `false` for normal-looking output.
+- Added terms are **bold and red** while `Pipeline:HighlightAddedTerms` is `true`, so they're easy to spot in
+  test PDFs. `HighlightColor` sets the color (hex, `FF0000` = red) and `HighlightFontSize` the size in points
+  (e.g. `10.5`; `0` = same as the line). Set `HighlightAddedTerms` to `false` for normal-looking output.
 - Next to each PDF, `<name>.tech-added.txt` lists what was added to each line.
 
 > v1 adds **every** missing posting term, including ones you may not have. Use it to test the pipeline; don't

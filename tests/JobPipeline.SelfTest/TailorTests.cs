@@ -59,6 +59,21 @@ public static class TailorTests
             return Task.CompletedTask;
         });
 
+        Test("tailor: optional font size for added terms (points → Word half-points); unset keeps the line's size", () =>
+        {
+            var dir = NewDir();
+            var template = Path.Combine(dir, "template.docx");
+            WriteDocx(template, Para(Run("C#, SQL {{ADD_MISSING}}", italic: true)));
+            var output = Path.Combine(dir, "out.docx");
+            DocxTemplate.AddMissing(template, output, _ => ["Azure", "Kubernetes"], new AddedStyle(true, "FF0000", 10.5));
+            var body = ReadBody(output);
+            Eq(2, CountOf(body, "<w:b /><w:i /><w:color w:val=\"FF0000\" /><w:sz w:val=\"21\" /><w:szCs w:val=\"21\" />"),
+                "bold, italic, color, size in Word's order");
+            DocxTemplate.AddMissing(template, output, _ => ["Azure"], new AddedStyle(true, "FF0000"));
+            Eq(false, ReadBody(output).Contains("<w:sz "), "no size set when not configured");
+            return Task.CompletedTask;
+        });
+
         Test("tailor: nothing missing leaves the line as it was (tag removed)", () =>
         {
             var dir = NewDir();

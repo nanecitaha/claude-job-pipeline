@@ -5,8 +5,11 @@ using System.Xml.Linq;
 
 namespace JobPipeline.Worker;
 
-/// <summary>How terms added to a line are styled (e.g. red + bold while testing).</summary>
-public sealed record AddedStyle(bool Bold, string? ColorHex);
+/// <summary>
+/// How terms added to a line are styled (e.g. red + bold while testing). <paramref name="FontSizePt"/> in points;
+/// null keeps the line's own size.
+/// </summary>
+public sealed record AddedStyle(bool Bold, string? ColorHex, double? FontSizePt = null);
 
 /// <summary>One tagged line: the terms it already had and the terms that were added.</summary>
 public sealed record AddedLine(IReadOnlyList<string> Existing, IReadOnlyList<string> Added);
@@ -192,6 +195,12 @@ public static partial class DocxTemplate
         {
             if (style.Bold) SetProp(rPr, "b", null);
             if (!string.IsNullOrWhiteSpace(style.ColorHex)) SetProp(rPr, "color", style.ColorHex.TrimStart('#'));
+            if (style.FontSizePt is > 0 and var pt)
+            {
+                var halfPoints = ((int)Math.Round(pt * 2)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                SetProp(rPr, "sz", halfPoints);     // Word stores size in half-points
+                SetProp(rPr, "szCs", halfPoints);
+            }
         }
         var t = new XElement(W + "t", text);
         t.SetAttributeValue(XNamespace.Xml + "space", "preserve");

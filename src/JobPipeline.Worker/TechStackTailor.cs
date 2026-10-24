@@ -27,7 +27,9 @@ public sealed class TechStackTailor(PipelineOptions options, IPdfConverter conve
         var name = ResumeFiles.BaseName(job);
         var docx = Path.Combine(request.OutputDir, name + ".docx");
         var pdf = Path.Combine(request.OutputDir, name + ".pdf");
-        var style = options.HighlightAddedTerms ? new AddedStyle(Bold: true, ColorHex: options.HighlightColor) : null;
+        var style = options.HighlightAddedTerms
+            ? new AddedStyle(Bold: true, ColorHex: options.HighlightColor, FontSizePt: options.HighlightFontSize > 0 ? options.HighlightFontSize : null)
+            : null;
 
         var lines = DocxTemplate.AddMissing(template, docx, existing => Merge(existing, job.TechStack).Added, style);
         try
