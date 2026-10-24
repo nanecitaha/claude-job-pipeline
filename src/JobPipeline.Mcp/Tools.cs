@@ -45,7 +45,7 @@ public static class Tools
                 "source":{"type":"string","description":"Site it was found on: builtin, dice, wellfound, greenhouse, lever, ashby, linkedin, indeed, company"},
                 "company":{"type":"string"},
                 "title":{"type":"string","description":"Exactly as posted"},
-                "matchedTitle":{"type":"string","description":"Which target or similar title from the hunt config it matched"},
+                "matchedTitle":{"type":"string","description":"Which Keep rule from the hunt config it matched, in a few words"},
                 "listingUrl":{"type":"string","description":"URL of the listing where it was found"},
                 "applyUrl":{"type":"string","description":"Employer's own application page, when the listing links out"},
                 "externalJobId":{"type":"string","description":"Job/requisition id shown in the posting or URL"},

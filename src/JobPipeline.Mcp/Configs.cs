@@ -56,33 +56,22 @@ public static class Configs
         # Hunt config
         Example values for a senior .NET search; replace with your own. Edit freely. Claude reads this at the start of every hunt and apply run.
 
-        ## Target titles
-        - Senior Backend Engineer (.NET / C#)
-        - Senior .NET Developer
-        - Senior Full Stack .NET Developer
-
-        ## Similar titles (also accept)
-        - Senior Software Engineer (when C#/.NET is the primary stack)
-        - Lead .NET Developer
-        - Staff Software Engineer (.NET)
-        - Senior Back-End Developer
-        - Senior Platform Engineer (.NET)
-        - Senior C# Developer
+        ## Keep
+        The hunt keeps a posting when ALL of these hold, and applies no other filters of its own.
+        - Role: any software engineering role (engineer, developer, lead, staff, architect, manager), any seniority
+          or none stated
+        - Stack: C# or .NET is mentioned anywhere in the job description (mixed-language roles are fine)
+        - Location: anywhere in the US (remote, hybrid or onsite)
 
         ## Exclude
-        - Primary stack is not C#/.NET (Java, Go, Ruby, Python-only, Node-only, iOS, Android)
-        - Junior, mid-level, intern, contract-to-hire under 6 months
-        - Requires security clearance or US citizenship you can't meet
-        - Onsite or hybrid outside your area
-
-        ## Location
-        - Remote, US
+        - Internships, new-grad, junior or entry-level roles
+        - Requires a security clearance you don't have
 
         ## Experience rule
         - Don't skip a posting only because it asks for 1-2 more years than you have.
 
         ## Sites (searched in this order)
-        Paste each site's search URL with your filters already applied (remote, senior, posted recently).
+        Paste each site's search URL with your filters already applied (e.g. keyword, posted recently).
         Test a URL in the browser first: some filters look applied but aren't (builtin's /net/ path segment, for
         one, returns general engineering jobs; its ?search= keyword works).
         | name    | search url                                                         | pages |
