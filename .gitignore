@@ -4,3 +4,4 @@ obj/
 .vs/
 resume.md
 applicant-profile.md
+__pycache__/
