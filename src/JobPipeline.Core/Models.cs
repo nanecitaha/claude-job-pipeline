@@ -63,6 +63,7 @@ public sealed class Job
     public DateTimeOffset? InterviewDate { get; set; }
     public List<EmailEvent> Emails { get; set; } = new();
     public List<StatusChange> History { get; set; } = new();
+    public List<JobComment> Comments { get; set; } = new();
 
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
@@ -77,6 +78,42 @@ public sealed class EmailEvent
 }
 
 public sealed record StatusChange(JobStatus? From, JobStatus To, DateTimeOffset At, string By, string? Note);
+
+/// <summary>A note the user left on a job (e.g. from the dashboard).</summary>
+public sealed class JobComment
+{
+    public Guid Id { get; set; }
+    public DateTimeOffset At { get; set; }
+    public string By { get; set; } = "";
+    public string Text { get; set; } = "";
+}
+
+/// <summary>
+/// The user-editable fields of a job, sent whole: every field is replaced (null clears it). Status, history,
+/// emails and the resume are changed through their own operations.
+/// </summary>
+public sealed class JobEdit
+{
+    public string Company { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string? Source { get; set; }
+    public string? MatchedTitle { get; set; }
+    public string? ListingUrl { get; set; }
+    public string? ApplyUrl { get; set; }
+    public string? ExternalJobId { get; set; }
+    public string? Location { get; set; }
+    public bool? IsRemote { get; set; }
+    public int? SalaryMin { get; set; }
+    public int? SalaryMax { get; set; }
+    public string? SalaryCurrency { get; set; }
+    public string? SalaryText { get; set; }
+    public List<string>? TechStack { get; set; }
+    public string? DatePosted { get; set; }
+    public bool IsEasyApply { get; set; }
+    public string? ActionDesc { get; set; }
+    public DateTimeOffset? DateApplied { get; set; }
+    public DateTimeOffset? InterviewDate { get; set; }
+}
 
 /// <summary>Input for the hunt. Everything except Company, Title and a URL is optional.</summary>
 public sealed class NewJob

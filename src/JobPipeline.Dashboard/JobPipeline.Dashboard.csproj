@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>JobPipeline.Dashboard</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Copy the page next to the dll on build too (not just publish), so `dotnet run` and the e2e test serve it. -->
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\JobPipeline.Core\JobPipeline.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -335,6 +335,140 @@ public sealed class JobStore
         return (new EmailResult(job.Id, before, job.Status, Duplicate: false), true);
     });
 
+    // ───────────────────────────── Dashboard (you, editing by hand) ─────────────────────────────
+
+    /// <summary>Replaces the job's editable fields (see <see cref="JobEdit"/>). Doesn't change its status.</summary>
+    public Job EditJob(Guid id, JobEdit e, string by = "you") => Mutate(db =>
+    {
+        Require(!string.IsNullOrWhiteSpace(e.Company), "company is required");
+        Require(!string.IsNullOrWhiteSpace(e.Title), "title is required");
+        Require(!string.IsNullOrWhiteSpace(e.ListingUrl) || !string.IsNullOrWhiteSpace(e.ApplyUrl),
+            "listingUrl or applyUrl is required");
+        Require(e.SalaryMin is null || e.SalaryMax is null || e.SalaryMin <= e.SalaryMax, "salaryMin is above salaryMax");
+        var job = Get(db, id);
+        job.Company = e.Company.Trim();
+        job.Title = e.Title.Trim();
+        job.Source = Blank(e.Source) ?? job.Source;
+        job.MatchedTitle = Blank(e.MatchedTitle);
+        job.ListingUrl = Blank(e.ListingUrl);
+        job.ApplyUrl = Blank(e.ApplyUrl);
+        job.ExternalJobId = Blank(e.ExternalJobId);
+        job.Location = Blank(e.Location);
+        job.IsRemote = e.IsRemote;
+        job.SalaryMin = e.SalaryMin;
+        job.SalaryMax = e.SalaryMax;
+        job.SalaryCurrency = Blank(e.SalaryCurrency);
+        job.SalaryText = Blank(e.SalaryText);
+        job.TechStack = e.TechStack?.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToList() ?? new();
+        job.DatePosted = Blank(e.DatePosted);
+        job.IsEasyApply = e.IsEasyApply;
+        job.ActionDesc = Blank(e.ActionDesc);
+        job.DateApplied = e.DateApplied;
+        job.InterviewDate = e.InterviewDate;
+        job.DedupeKey = Dedupe.Key(job.Company, job.Title);
+        job.UpdatedAt = Now;
+        job.History.Add(new StatusChange(job.Status, job.Status, Now, by, "fields edited"));
+        return (Clone(job), true);
+    });
+
+    /// <summary>
+    /// Sets any status by hand, with an optional note in the history. New re-queues the job for a fresh resume;
+    /// Applied stamps the applied date if missing. Tailoring and Applying are set by the pipeline only.
+    /// </summary>
+    public Job SetStatus(Guid id, JobStatus to, string? note, string by = "you") => Mutate(db =>
+    {
+        Require(to is not (JobStatus.Tailoring or JobStatus.Applying),
+            $"{to} is set by the pipeline itself; choose New to re-tailor or ReadyToApply to queue for applying");
+        var job = Get(db, id);
+        note = Blank(note);
+        switch (to)
+        {
+            case JobStatus.New:
+                job.ResumePath = null;
+                job.LastError = null;
+                job.TailorAttempts = 0;
+                job.ActionDesc = null;
+                break;
+            case JobStatus.ReadyToApply:
+                Require(job.ResumePath is not null, "this job has no resume yet; set it to New so the worker makes one");
+                job.ActionDesc = null;
+                break;
+            case JobStatus.Applied:
+                job.DateApplied ??= Now;
+                job.ActionDesc = null;
+                break;
+            case JobStatus.ActionNeeded or JobStatus.Skipped or JobStatus.Expired:
+                job.ActionDesc = note ?? job.ActionDesc ?? $"{to} (set by you)";
+                break;
+        }
+        Move(job, to, by, note ?? "set by hand");
+        return (Clone(job), true);
+    });
+
+    public Job AddComment(Guid id, string text, string by = "you") => Mutate(db =>
+    {
+        Require(!string.IsNullOrWhiteSpace(text), "comment text is required");
+        var job = Get(db, id);
+        job.Comments.Add(new JobComment { Id = Guid.NewGuid(), At = Now, By = by, Text = text.Trim() });
+        job.UpdatedAt = Now;
+        return (Clone(job), true);
+    });
+
+    public Job DeleteComment(Guid id, Guid commentId) => Mutate(db =>
+    {
+        var job = Get(db, id);
+        Require(job.Comments.RemoveAll(c => c.Id == commentId) > 0, $"No comment with id {commentId}");
+        job.UpdatedAt = Now;
+        return (Clone(job), true);
+    });
+
+    /// <summary>Replaces the saved job description text.</summary>
+    public Job SaveJobDescription(Guid id, string text, string by = "you") => Mutate(db =>
+    {
+        Require(!string.IsNullOrWhiteSpace(text), "job description text is required");
+        var job = Get(db, id);
+        job.JdPath = null;
+        job.UpdatedAt = Now;
+        db.PendingJds[job.Id] = text;
+        return (Clone(job), true);
+    });
+
+    /// <summary>Removes a job and its description from the database. Resume files on disk are left alone.</summary>
+    public bool DeleteJob(Guid id)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction(IsolationLevel.Serializable, deferred: false);
+        foreach (var sql in new[] { "DELETE FROM job_descriptions WHERE job_id = $id", "DELETE FROM jobs WHERE id = $id" })
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = sql;
+            cmd.Parameters.AddWithValue("$id", id.ToString());
+            cmd.ExecuteNonQuery();
+        }
+        var gone = Scalar(conn, tx, "SELECT changes()") > 0;
+        tx.Commit();
+        return gone;
+    }
+
+    /// <summary>Full job records, newest activity first, filtered by status and a free-text search.</summary>
+    public IReadOnlyList<Job> QueryJobs(JobStatus? status, string? search, int limit = 500, int offset = 0) => Read(db =>
+    {
+        var q = Blank(search);
+        return db.Jobs
+            .Where(j => status is null || j.Status == status)
+            .Where(j => q is null || Matches(j, q))
+            .OrderByDescending(j => j.UpdatedAt)
+            .Skip(Math.Max(0, offset)).Take(Math.Clamp(limit, 1, 2000))
+            .Select(Clone).ToList();
+    });
+
+    static bool Matches(Job j, string q) =>
+        new[] { j.Company, j.Title, j.Location, j.Source, j.ActionDesc, j.SalaryText, j.ExternalJobId }
+            .Any(f => f?.Contains(q, StringComparison.OrdinalIgnoreCase) == true)
+        || j.TechStack.Any(t => t.Contains(q, StringComparison.OrdinalIgnoreCase))
+        || j.Comments.Any(c => c.Text.Contains(q, StringComparison.OrdinalIgnoreCase));
+
     // ───────────────────────────── Reads ─────────────────────────────
 
     public Job? GetJob(Guid id) => Read(db => db.Jobs.FirstOrDefault(j => j.Id == id) is { } j ? Clone(j) : null);

@@ -58,11 +58,12 @@ dotnet run --project tests\JobPipeline.SelfTest
 
 The last line should say `... passed, 0 failed`. One `SKIP` line is fine.
 
-### 1.4 Build the two programs
+### 1.4 Build the programs
 
 ```powershell
 dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
 dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
+dotnet publish src\JobPipeline.Dashboard -c Release -o C:\JobPipeline\bin\dashboard
 ```
 
 Each should end with **Build succeeded**.
@@ -190,7 +191,32 @@ Tailoring worker started. Data folder: C:\JobPipeline\data. Tailor: TechStackTai
 
 Different folder, or `CopyMasterResumeTailor`? See Part 5.
 
-### 4.2 What to say to Claude
+### 4.2 See and edit your jobs (dashboard)
+
+Open a second PowerShell window and run:
+
+```powershell
+C:\JobPipeline\bin\dashboard\JobPipeline.Dashboard.exe
+```
+
+Then open **http://localhost:5080** in your browser. Leave the window open while you use it (Ctrl+C stops it).
+It can run at the same time as the worker and Claude.
+
+- The coloured bar at the top counts jobs per status; click one to show only those jobs, click again for all.
+- The search box looks through company, title, location, tech stack and your comments.
+- Click a job to open it: change its status (with a note), add comments, edit any field, fix the job
+  description, see its history, open the tailored resume, or delete it.
+- **Add a job** puts in one you found yourself. Leave it as New and the worker tailors a resume for it.
+- Setting a job back to **New** makes the worker tailor a fresh resume. Tailoring and Applying can't be set
+  by hand: the worker and Claude set those.
+
+Different data folder or port? Create `C:\JobPipeline\bin\dashboard\appsettings.Local.json`:
+
+```json
+{ "Urls": "http://localhost:5090", "Dashboard": { "DataDir": "D:\\jobs\\data" } }
+```
+
+### 4.3 What to say to Claude
 
 Always in a **new chat** in Claude desktop.
 
@@ -211,7 +237,7 @@ Always in a **new chat** in Claude desktop.
 | Drop a job | `skip Acme` |
 | Update from your email | `sync job emails` |
 
-### 4.3 Where things end up
+### 4.4 Where things end up
 
 ```
 C:\JobPipeline\data\resumes\acme-senior-backend-engineer-1a2b3c4d\
@@ -226,7 +252,7 @@ open `C:\JobPipeline\data\jobs.db` **read-only**, and run:
 SELECT company, title, status, location, listing_url, apply_url, resume_path FROM jobs;
 ```
 
-### 4.4 Job statuses
+### 4.5 Job statuses
 
 | Status | Meaning |
 |---|---|
@@ -238,7 +264,7 @@ SELECT company, title, status, location, listing_url, apply_url, resume_path FRO
 | Failed | The worker couldn't make a resume 3 times; the reason is on the job |
 | Skipped / Expired | Not a fit / posting gone |
 
-### 4.5 Before real applications
+### 4.6 Before real applications
 
 Version 1 of the tailor adds **every** keyword from the posting that your line is missing, in **red bold** so
 you can see them. That's for testing. Before sending real applications:
@@ -254,12 +280,13 @@ you can see them. That's for testing. Before sending real applications:
 ### 5.1 Getting a new version
 
 ```powershell
-# 1. Quit Claude (tray icon → Quit) and stop the worker (Ctrl+C in its window)
+# 1. Quit Claude (tray icon → Quit), stop the worker and the dashboard (Ctrl+C in their windows)
 cd C:\claude-job-pipeline
 git pull
 dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
 dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
-# 2. Reopen Claude, start the worker again
+dotnet publish src\JobPipeline.Dashboard -c Release -o C:\JobPipeline\bin\dashboard
+# 2. Reopen Claude, start the worker (and dashboard) again
 ```
 
 Your data folder, `appsettings.Local.json` and settings files are never overwritten. New sections added to the

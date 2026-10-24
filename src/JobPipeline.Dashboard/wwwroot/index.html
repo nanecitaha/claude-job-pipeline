@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Job Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>Job pipeline</h1>
+      <p class="sub" id="dataDir">Loading…</p>
+    </div>
+    <p class="refreshed" id="refreshed" aria-live="polite"></p>
+  </header>
+
+  <nav class="rail" id="rail" aria-label="Filter by status"></nav>
+
+  <section class="toolbar">
+    <label class="search">
+      <span class="visually-hidden">Search jobs</span>
+      <input id="search" type="search" placeholder="Search company, title, location, tech, comments" autocomplete="off">
+    </label>
+    <p class="filter-note" id="filterNote"></p>
+    <button class="btn primary" id="addJob" type="button">Add a job</button>
+  </section>
+
+  <main>
+    <table class="jobs" id="jobs">
+      <thead>
+        <tr>
+          <th scope="col">Job</th>
+          <th scope="col">Status</th>
+          <th scope="col">Location</th>
+          <th scope="col">Pay</th>
+          <th scope="col">Posted</th>
+          <th scope="col">Updated</th>
+          <th scope="col"><span class="visually-hidden">Resume</span></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="empty" id="empty" hidden></p>
+  </main>
+
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-labelledby="drawerTitle" hidden>
+    <div class="drawer-head">
+      <div>
+        <p class="drawer-company" id="drawerCompany"></p>
+        <h2 id="drawerTitle"></h2>
+        <div class="drawer-meta" id="drawerMeta"></div>
+      </div>
+      <button class="btn ghost close" id="closeDrawer" type="button" aria-label="Close">Close</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

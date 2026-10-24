@@ -29,3 +29,5 @@ jobs:
         run: dotnet run --no-build --project tests/JobPipeline.SelfTest
       - name: End-to-end (MCP stdio + worker)
         run: python tests/e2e/mcp_e2e.py
+      - name: End-to-end (dashboard API)
+        run: python tests/e2e/dashboard_e2e.py

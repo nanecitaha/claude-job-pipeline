@@ -353,6 +353,67 @@ Test("tech stack update: replaces the list; re-queues unapplied tailored jobs, l
     Eq("Go", string.Join("|", after.TechStack));
 });
 
+Test("dashboard: edit fields replaces them, recomputes the dedupe key, keeps status, validates", () =>
+{
+    var s = new JobStore(NewDir());
+    var id = ReadyJob(s);
+    var edit = new JobEdit
+    {
+        Company = "Globex", Title = "Staff Engineer", ListingUrl = "https://x/1", Location = "Boston, MA", IsRemote = false,
+        SalaryMin = 150000, SalaryMax = 180000, TechStack = ["C#", " ", "C#", "Azure"], ActionDesc = "  ",
+    };
+    var j = s.EditJob(id, edit);
+    Eq("Globex|Staff Engineer|Boston, MA|False", $"{j.Company}|{j.Title}|{j.Location}|{j.IsRemote}");
+    Eq("C#|Azure", string.Join("|", j.TechStack));
+    Eq<string?>(null, j.ActionDesc);
+    Eq<string?>(null, j.ApplyUrl, "cleared");
+    Eq(JobStatus.ReadyToApply, j.Status);
+    Eq("globex|staff engineer", j.DedupeKey);
+    Throws<PipelineException>(() => s.EditJob(id, new JobEdit { Company = "", Title = "t", ListingUrl = "u" }), "company");
+    Throws<PipelineException>(() => s.EditJob(id, new JobEdit { Company = "c", Title = "t" }), "url");
+    Throws<PipelineException>(() => s.EditJob(id, new JobEdit { Company = "c", Title = "t", ListingUrl = "u", SalaryMin = 2, SalaryMax = 1 }), "salaryMin");
+});
+
+Test("dashboard: set any status by hand, with side effects and a history note", () =>
+{
+    var s = new JobStore(NewDir());
+    var id = ReadyJob(s);
+    var applied = s.SetStatus(id, JobStatus.Applied, "applied on their site");
+    Eq(JobStatus.Applied, applied.Status);
+    if (applied.DateApplied is null) throw new Exception("dateApplied not stamped");
+    Eq("applied on their site", applied.History[^1].Note);
+    Eq("you", applied.History[^1].By);
+    var blocked = s.SetStatus(id, JobStatus.ActionNeeded, "call recruiter");
+    Eq("call recruiter", blocked.ActionDesc);
+    var renew = s.SetStatus(id, JobStatus.New, null);
+    Eq<string?>(null, renew.ResumePath);
+    Throws<PipelineException>(() => s.SetStatus(id, JobStatus.ReadyToApply, null), "no resume");
+    Throws<PipelineException>(() => s.SetStatus(id, JobStatus.Applying, null), "pipeline");
+});
+
+Test("dashboard: comments add and delete; job description saved; search; delete job", () =>
+{
+    var dir = NewDir();
+    var s = new JobStore(dir);
+    var id = s.AddJob(Posting()).Id;
+    var other = s.AddJob(Posting("Globex", "Senior .NET Developer", "https://g/1")).Id;
+    var c = s.AddComment(id, "  recruiter is Jane  ");
+    Eq("recruiter is Jane", c.Comments.Single().Text);
+    Throws<PipelineException>(() => s.AddComment(id, " "), "required");
+    Eq(1, s.QueryJobs(null, "jane").Count, "search finds comments");
+    Eq(2, s.QueryJobs(null, "rabbitmq").Count, "search finds tech stack (both postings list it)");
+    Eq(other, s.QueryJobs(null, "GLOBEX").Single().Id, "search finds company, any case");
+    Eq(2, s.QueryJobs(JobStatus.New, null).Count);
+    Eq(0, s.DeleteComment(id, c.Comments[0].Id).Comments.Count);
+    s.SaveJobDescription(id, "Edited JD");
+    Eq("Edited JD", s.ReadJd(s.GetJob(id)!));
+    Eq(true, s.DeleteJob(id));
+    Eq<Job?>(null, s.GetJob(id));
+    Eq(false, s.DeleteJob(id), "second delete finds nothing");
+    Eq<string?>(null, s.ReadJd(new Job { Id = id }), "description deleted too");
+    Eq(other, new JobStore(dir).QueryJobs(null, null).Single().Id);
+});
+
 var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;
