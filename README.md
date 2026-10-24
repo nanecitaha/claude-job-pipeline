@@ -108,37 +108,43 @@ The worker runs one tailor, chosen with `Pipeline:Tailor` in `appsettings.json`:
 
 | `Tailor`     | What it does                                                                               |
 |--------------|--------------------------------------------------------------------------------------------|
-| `TechStack`  | **v1 (test).** Fills each role's tech-stack line in your Word resume, then saves a PDF.     |
+| `TechStack`  | **v1 (test).** Adds the job's missing tech terms to your resume's tech lines, saves a PDF. |
 | `CopyMaster` | Copies `MasterResumePath` unchanged (no tailoring).                                        |
 
 ### Tech-stack tailor (v1)
 
-For each job it takes your stack for each role, appends every term from the job's tech stack (as stored by the
-hunt) that the role doesn't already list, and writes the result into your resume:
+Keeps your resume's tech-stack lines as they are and appends the job's tech-stack terms (as stored by the hunt)
+that each line is missing:
 
-- Your terms stay first, in your order; posting terms are appended in the posting's own spelling.
+```
+Your line:   C#, .NET, RabbitMQ, SQL Server {{ADD_MISSING}}
+Job wants:   C#, Azure, Kubernetes
+PDF shows:   C#, .NET, RabbitMQ, SQL Server, Azure, Kubernetes     (added terms in red bold)
+```
+
+- Your terms stay exactly as written; posting terms are appended in the posting's own spelling.
 - Matching ignores case only: `c#` = `C#`, but `.NET 8` and `.NET8` are different terms.
-- Next to each PDF, `<name>.tech-added.txt` lists exactly what was added per role.
+- Added terms are **bold and red** while `Pipeline:HighlightAddedTerms` is `true` (color: `HighlightColor`),
+  so they're easy to spot in test PDFs. Set it to `false` for normal-looking output.
+- Next to each PDF, `<name>.tech-added.txt` lists what was added to each line.
 
 > v1 adds **every** missing posting term, including ones you may not have. Use it to test the pipeline; don't
 > send these resumes on real applications until relevance filtering exists.
 
 Setup:
 
-1. **Template**: save your resume as `C:\JobPipeline\resume-template.docx`. Where each role's tech stack goes,
-   type a placeholder, e.g. `Tech stack: {{TECH_STACK:role1}}`. Formatting of the line is kept.
-2. **Your stack**: edit `MyTechStack` at the top of `src/JobPipeline.Worker/TechStackTailor.cs`, one entry per
-   placeholder key (`role1`, `role2`, ...). Rebuild/publish the worker after editing.
-3. **PDF converter**: `Pipeline:PdfConverter`
+1. **Template**: open your resume in Word and type `{{ADD_MISSING}}` at the **end** of each tech-stack line
+   (keep the line itself). Save it as `C:\JobPipeline\resume-template.docx`. No code changes needed.
+2. **PDF converter**: `Pipeline:PdfConverter`
    - `Word`: Microsoft Word starts hidden for each resume, converts, and quits (a few seconds; no window).
      Needs a logged-in session, so run the worker from a console or a scheduled task set to
      *Run only when user is logged on*, not as a service. Open Word by hand once first.
    - `LibreOffice`: headless and free; works on a server with nobody logged in.
      Install it, or set `Pipeline:LibreOfficePath` to `soffice.exe`.
-4. `Pipeline:KeepDocx: true` keeps the filled `.docx` next to the PDF while you tune the template.
+3. `Pipeline:KeepDocx: true` keeps the filled `.docx` next to the PDF while you tune the template.
 
-Errors (template missing, a placeholder with no `MyTechStack` entry, no placeholders, conversion failure) fail
-the attempt with the reason in the job's `lastError`; after `MaxTailorAttempts` the job goes to `Failed`.
+Errors (template missing, no `{{ADD_MISSING}}` tags, conversion failure) fail the attempt with the reason in the
+job's `lastError`; after `MaxTailorAttempts` the job goes to `Failed`.
 
 ### Bring your own tailor
 

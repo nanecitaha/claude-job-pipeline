@@ -2,7 +2,7 @@ using System.IO.Compression;
 using JobPipeline.Core;
 using JobPipeline.Worker;
 
-/// <summary>Tests for tailor v1 (tech-stack merge, .docx placeholders, PDF conversion).</summary>
+/// <summary>Tests for tailor v1 ({{ADD_MISSING}} lines, highlight, PDF conversion).</summary>
 public static class TailorTests
 {
     public static (int Passed, int Failed) Run()
@@ -24,48 +24,75 @@ public static class TailorTests
             return Task.CompletedTask;
         });
 
-        Test("tailor: fills every role's placeholder, even split across Word runs; other text untouched", () =>
+        Test("tailor: keeps each existing line, appends what's missing, removes the tag; other text untouched", () =>
         {
             var dir = NewDir();
             var template = Path.Combine(dir, "template.docx");
             WriteDocx(template,
                 Para(Run("Jane Doe")),
-                Para(Run("Tech stack: {{TECH_", bold: true), Run("STACK:role"), Run("1}}")),   // split like Word does
+                Para(Run("C#, .NET, RabbitMQ ", italic: true), Run("{{ADD_", italic: true), Run("MISSING}}", italic: true)),   // split like Word does
                 Para(Run("Built APIs.")),
-                Para(Run("Tools: {{TECH_STACK:Role2}} (remote)")));
+                Para(Run("Python, Flask, SQL{{ADD_MISSING}}", italic: true)));
             var output = Path.Combine(dir, "out.docx");
-            var keys = DocxTemplate.Fill(template, output, k => $"<{k}>");
-            Eq("role1,Role2", string.Join(",", keys));
-            var text = DocxTemplate.ReadText(output);
-            Eq("Jane Doe\nTech stack: <role1>\nBuilt APIs.\nTools: <Role2> (remote)\n", text.Replace("\r\n", "\n"));
-            Eq(true, ReadBody(output).Contains("<w:b />") || ReadBody(output).Contains("<w:b/>"), "bold run kept");
+            var posting = new[] { "c#", "Azure", "sql", "Kubernetes" };
+            var lines = DocxTemplate.AddMissing(template, output, e => TechStackTailor.Merge(e, posting).Added, null);
+            Eq(2, lines.Count);
+            Eq("C#, .NET, RabbitMQ", string.Join(", ", lines[0].Existing));
+            Eq("Azure, sql, Kubernetes", string.Join(", ", lines[0].Added));
+            Eq("c#, Azure, Kubernetes", string.Join(", ", lines[1].Added));   // "sql" already there as "SQL"
+            Eq("Jane Doe\nC#, .NET, RabbitMQ, Azure, sql, Kubernetes\nBuilt APIs.\nPython, Flask, SQL, c#, Azure, Kubernetes\n",
+                DocxTemplate.ReadText(output).Replace("\r\n", "\n"));
+            return Task.CompletedTask;
+        });
+
+        Test("tailor: added terms are red + bold and keep the line's italics; existing terms aren't highlighted", () =>
+        {
+            var dir = NewDir();
+            var template = Path.Combine(dir, "template.docx");
+            WriteDocx(template, Para(Run("C#, SQL {{ADD_MISSING}}", italic: true)));
+            var output = Path.Combine(dir, "out.docx");
+            DocxTemplate.AddMissing(template, output, _ => ["Azure", "Kubernetes"], new AddedStyle(true, "FF0000"));
+            var body = ReadBody(output);
+            Eq(2, CountOf(body, "<w:b /><w:i /><w:color w:val=\"FF0000\" />"), "added terms: bold, italic kept, red, in Word's order");
+            Contains(body, "<w:rPr><w:i /></w:rPr><w:t xml:space=\"preserve\">C#, SQL</w:t>");   // existing text unchanged
+            Eq("C#, SQL, Azure, Kubernetes\n", DocxTemplate.ReadText(output).Replace("\r\n", "\n"));
+            return Task.CompletedTask;
+        });
+
+        Test("tailor: nothing missing leaves the line as it was (tag removed)", () =>
+        {
+            var dir = NewDir();
+            var template = Path.Combine(dir, "template.docx");
+            WriteDocx(template, Para(Run("C#, Azure {{ADD_MISSING}}")));
+            var output = Path.Combine(dir, "out.docx");
+            var lines = DocxTemplate.AddMissing(template, output, e => TechStackTailor.Merge(e, ["azure"]).Added, new AddedStyle(true, "FF0000"));
+            Eq(0, lines[0].Added.Count);
+            Eq("C#, Azure\n", DocxTemplate.ReadText(output).Replace("\r\n", "\n"));
+            Eq(false, ReadBody(output).Contains("FF0000"));
             return Task.CompletedTask;
         });
 
         Test("tailor: end to end with a fake converter writes the PDF and a report of what was added", async () =>
         {
             var (dir, opts, job) = Setup();
-            var tailor = new TechStackTailor(opts, new CopyConverter(), Stack());
+            var tailor = new TechStackTailor(opts, new CopyConverter());
             var result = await tailor.TailorAsync(new TailorRequest(job, "jd", dir), CancellationToken.None);
             Eq(true, File.Exists(result.ResumePath) && result.ResumePath.EndsWith(".pdf"), "pdf written");
             Eq(false, File.Exists(Path.ChangeExtension(result.ResumePath, ".docx")), "temp docx removed");
             var text = DocxTemplate.ReadText(result.ResumePath);   // fake converter copies the docx
-            Contains(text, "Tech: C#, .NET 8, SQL Server, Azure, Kubernetes");
-            Contains(text, "Tech: C#, ASP.NET MVC, SQL Server, Azure, Kubernetes");
+            Contains(text, "C#, .NET 8, SQL Server, Azure, Kubernetes");
+            Contains(text, "C#, ASP.NET MVC, SQL Server, Azure, Kubernetes");
             var report = File.ReadAllText(Path.Combine(dir, ResumeFiles.BaseName(job) + ".tech-added.txt"));
-            Contains(report, "role1: added Azure, Kubernetes");
-            Contains(result.Note ?? "", "2 role(s), 2 term(s)");
+            Contains(report, "Line 1: added Azure, Kubernetes");
+            Contains(result.Note ?? "", "2 tech-stack line(s), 2 term(s)");
         });
 
-        Test("tailor: a template key with no stack entry, or no placeholders at all, fails clearly", async () =>
+        Test("tailor: a template without {{ADD_MISSING}} fails clearly and leaves nothing behind", async () =>
         {
             var (dir, opts, job) = Setup();
-            var t = new TechStackTailor(opts, new CopyConverter(), new Dictionary<string, string[]> { ["role1"] = ["C#"] });
-            await Throws<InvalidOperationException>(() => t.TailorAsync(new TailorRequest(job, "jd", dir), default), "no 'role2' entry");
-
-            WriteDocx(opts.ResumeTemplatePath, Para(Run("No placeholders here")));
-            t = new TechStackTailor(opts, new CopyConverter(), Stack());
-            await Throws<InvalidOperationException>(() => t.TailorAsync(new TailorRequest(job, "jd", dir), default), "No {{TECH_STACK");
+            WriteDocx(opts.ResumeTemplatePath, Para(Run("No tags here")));
+            var t = new TechStackTailor(opts, new CopyConverter());
+            await Throws<InvalidOperationException>(() => t.TailorAsync(new TailorRequest(job, "jd", dir), default), "No {{ADD_MISSING}}");
             Eq(0, Directory.GetFiles(dir, "*.pdf").Length, "no pdf left behind");
         });
 
@@ -73,7 +100,7 @@ public static class TailorTests
         {
             var (dir, opts, job) = Setup();
             opts.ResumeTemplatePath = Path.Combine(dir, "nope.docx");
-            var t = new TechStackTailor(opts, new CopyConverter(), Stack());
+            var t = new TechStackTailor(opts, new CopyConverter());
             await Throws<FileNotFoundException>(() => t.TailorAsync(new TailorRequest(job, "jd", dir), default), "ResumeTemplatePath");
         });
 
@@ -84,11 +111,11 @@ public static class TailorTests
         }
         else
         {
-            Test("tailor: real PDF via LibreOffice contains the merged tech stack", async () =>
+            Test("tailor: real PDF via LibreOffice", async () =>
             {
                 var (dir, opts, job) = Setup();
                 opts.LibreOfficePath = soffice;
-                var t = new TechStackTailor(opts, new LibreOfficePdfConverter(opts), Stack());
+                var t = new TechStackTailor(opts, new LibreOfficePdfConverter(opts));
                 var result = await t.TailorAsync(new TailorRequest(job, "jd", dir), CancellationToken.None);
                 var bytes = File.ReadAllBytes(result.ResumePath);
                 Eq("%PDF", System.Text.Encoding.ASCII.GetString(bytes, 0, 4), "pdf header");
@@ -106,21 +133,15 @@ public static class TailorTests
         public Task ConvertAsync(string docx, string pdf, CancellationToken ct) { File.Copy(docx, pdf, true); return Task.CompletedTask; }
     }
 
-    static Dictionary<string, string[]> Stack() => new()
-    {
-        ["role1"] = ["C#", ".NET 8", "SQL Server"],
-        ["role2"] = ["C#", "ASP.NET MVC", "SQL Server"],
-    };
-
     static (string Dir, PipelineOptions Opts, Job Job) Setup()
     {
         var dir = NewDir();
         var template = Path.Combine(dir, "resume-template.docx");
         WriteDocx(template,
             Para(Run("Senior Software Engineer, Company A")),
-            Para(Run("Tech: {{TECH_STACK:role1}}")),
+            Para(Run("C#, .NET 8, SQL Server {{ADD_MISSING}}", italic: true)),
             Para(Run("Software Developer, Company B")),
-            Para(Run("Tech: {{TECH_STACK:role2}}")));
+            Para(Run("C#, ASP.NET MVC, SQL Server {{ADD_MISSING}}", italic: true)));
         var opts = new PipelineOptions { ResumeTemplatePath = template, ConversionTimeoutSeconds = 120 };
         var job = new Job
         {
@@ -133,8 +154,8 @@ public static class TailorTests
     static string NewDir() =>
         Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "jp-tailor-" + Guid.NewGuid().ToString("N")[..8])).FullName;
 
-    static string Run(string text, bool bold = false) =>
-        $"<w:r>{(bold ? "<w:rPr><w:b/></w:rPr>" : "")}<w:t xml:space=\"preserve\">{System.Security.SecurityElement.Escape(text)}</w:t></w:r>";
+    static string Run(string text, bool italic = false) =>
+        $"<w:r>{(italic ? "<w:rPr><w:i/></w:rPr>" : "")}<w:t xml:space=\"preserve\">{System.Security.SecurityElement.Escape(text)}</w:t></w:r>";
 
     static string Para(params string[] runs) => $"<w:p>{string.Concat(runs)}</w:p>";
 
@@ -166,6 +187,13 @@ public static class TailorTests
         using var zip = ZipFile.OpenRead(docx);
         using var r = new StreamReader(zip.GetEntry("word/document.xml")!.Open());
         return r.ReadToEnd();
+    }
+
+    static int CountOf(string s, string sub)
+    {
+        int n = 0, i = 0;
+        while ((i = s.IndexOf(sub, i, StringComparison.Ordinal)) >= 0) { n++; i += sub.Length; }
+        return n;
     }
 
     static string? FindSoffice()

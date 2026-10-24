@@ -3,48 +3,22 @@ using System.Text;
 namespace JobPipeline.Worker;
 
 /// <summary>
-/// Tailor v1 (test version): fills each role's tech-stack line in your Word resume with your own stack for that
-/// role plus every term from the job's tech stack (read from the database) that the role doesn't already list,
-/// then saves the resume as a PDF.
+/// Tailor v1 (test version). Keeps your resume's tech-stack lines as they are and appends the job's tech-stack
+/// terms (read from the database) that a line is missing, then saves the resume as a PDF.
+///
+/// Setup: in your resume .docx, type {{ADD_MISSING}} at the end of each tech-stack line, e.g.
+///   C#, .NET, RabbitMQ, SQL Server {{ADD_MISSING}}
+/// The line is read as a comma-separated list; missing posting terms go where the tag was and the tag is removed.
+/// With Pipeline:HighlightAddedTerms (on by default) the added terms are bold and colored so they stand out.
 ///
 /// It adds ALL missing posting terms, including ones you may not have. Treat these resumes as test output and
 /// don't submit them on real applications until relevance filtering (v2) exists.
-///
-/// Setup: in your resume .docx, put a placeholder where each role's tech stack goes, e.g.
-///   Tech stack: {{TECH_STACK:role1}}
-/// and add a matching key to <see cref="MyTechStack"/>. Set Pipeline:ResumeTemplatePath to that .docx.
 /// </summary>
-public sealed class TechStackTailor : ITailor
+public sealed class TechStackTailor(PipelineOptions options, IPdfConverter converter) : ITailor
 {
-    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-    // EDIT THIS: your tech stack per role, in the order you want it shown. Each key must match a
-    // {{TECH_STACK:key}} placeholder in your resume template (keys are case-insensitive).
-    // This repo is public: if you'd rather not commit your real roles, keep the keys generic (role1, role2, ...).
-    // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-    public static readonly IReadOnlyDictionary<string, string[]> MyTechStack =
-        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["role1"] = ["C#", ".NET 8", "ASP.NET Core", "SQL Server", "RabbitMQ"],
-            ["role2"] = ["C#", "ASP.NET MVC", ".NET Framework 4.8", "SQL Server"],
-            ["role3"] = ["Python", "SQL"],
-        };
-
-    readonly PipelineOptions _options;
-    readonly IPdfConverter _converter;
-    readonly IReadOnlyDictionary<string, string[]> _stack;
-
-    public TechStackTailor(PipelineOptions options, IPdfConverter converter) : this(options, converter, MyTechStack) { }
-
-    public TechStackTailor(PipelineOptions options, IPdfConverter converter, IReadOnlyDictionary<string, string[]> stack)
-    {
-        _options = options;
-        _converter = converter;
-        _stack = new Dictionary<string, string[]>(stack, StringComparer.OrdinalIgnoreCase);
-    }
-
     public async Task<TailorResult> TailorAsync(TailorRequest request, CancellationToken ct)
     {
-        var template = _options.ResumeTemplatePath;
+        var template = options.ResumeTemplatePath;
         if (string.IsNullOrWhiteSpace(template) || !File.Exists(template))
             throw new FileNotFoundException(
                 $"Resume template not found: '{template}'. Set Pipeline:ResumeTemplatePath to your resume .docx.");
@@ -53,40 +27,32 @@ public sealed class TechStackTailor : ITailor
         var name = ResumeFiles.BaseName(job);
         var docx = Path.Combine(request.OutputDir, name + ".docx");
         var pdf = Path.Combine(request.OutputDir, name + ".pdf");
+        var style = options.HighlightAddedTerms ? new AddedStyle(Bold: true, ColorHex: options.HighlightColor) : null;
 
-        var added = new List<(string Role, IReadOnlyList<string> Terms)>();
-        var roles = DocxTemplate.Fill(template, docx, role =>
-        {
-            if (!_stack.TryGetValue(role, out var mine))
-                throw new InvalidOperationException(
-                    $"The template has {{{{TECH_STACK:{role}}}}} but TechStackTailor.MyTechStack has no '{role}' entry.");
-            var merged = Merge(mine, job.TechStack);
-            added.Add((role, merged.Added));
-            return string.Join(", ", merged.All);
-        });
-
+        var lines = DocxTemplate.AddMissing(template, docx, existing => Merge(existing, job.TechStack).Added, style);
         try
         {
-            if (roles.Count == 0)
+            if (lines.Count == 0)
                 throw new InvalidOperationException(
-                    "No {{TECH_STACK:role}} placeholders found in the resume template; nothing to tailor.");
+                    "No {{ADD_MISSING}} tags found in the resume template. Type {{ADD_MISSING}} at the end of each " +
+                    "tech-stack line.");
 
-            await _converter.ConvertAsync(docx, pdf, ct);
+            await converter.ConvertAsync(docx, pdf, ct);
             if (!File.Exists(pdf)) throw new InvalidOperationException("PDF conversion reported success but produced no file.");
         }
         finally
         {
-            if (!_options.KeepDocx) File.Delete(docx);
+            if (!options.KeepDocx) File.Delete(docx);
         }
 
         // Next to the PDF: exactly what was added from the posting, so test output is easy to review.
         var report = new StringBuilder($"{job.Company} – {job.Title}\nPosting tech stack: {string.Join(", ", job.TechStack)}\n");
-        foreach (var (role, terms) in added)
-            report.Append($"{role}: added {(terms.Count == 0 ? "nothing" : string.Join(", ", terms))}\n");
+        for (var i = 0; i < lines.Count; i++)
+            report.Append($"Line {i + 1}: added {(lines[i].Added.Count == 0 ? "nothing" : string.Join(", ", lines[i].Added))}\n");
         await File.WriteAllTextAsync(Path.Combine(request.OutputDir, name + ".tech-added.txt"), report.ToString(), ct);
 
-        var total = added.SelectMany(a => a.Terms).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-        return new TailorResult(pdf, $"tailor v1: tech stack on {roles.Count} role(s), {total} term(s) added from the posting");
+        var total = lines.SelectMany(l => l.Added).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        return new TailorResult(pdf, $"tailor v1: {lines.Count} tech-stack line(s), {total} term(s) added from the posting");
     }
 
     /// <summary>

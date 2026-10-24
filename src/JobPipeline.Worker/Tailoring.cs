@@ -15,7 +15,7 @@ public sealed class PipelineOptions
 
     /// <summary>Which tailor runs: "TechStack" (v1: fills tech-stack lines, saves PDF) or "CopyMaster" (copies the master resume).</summary>
     public string Tailor { get; set; } = "CopyMaster";
-    /// <summary>Your resume as a Word .docx with {{TECH_STACK:role}} placeholders (TechStack tailor).</summary>
+    /// <summary>Your resume as a Word .docx with {{ADD_MISSING}} at the end of each tech-stack line (TechStack tailor).</summary>
     public string ResumeTemplatePath { get; set; } = "";
     /// <summary>"Word" (Microsoft Word, needs a logged-in session) or "LibreOffice" (headless, works on servers).</summary>
     public string PdfConverter { get; set; } = "Word";
@@ -24,6 +24,10 @@ public sealed class PipelineOptions
     public int ConversionTimeoutSeconds { get; set; } = 120;
     /// <summary>Keep the filled .docx next to the PDF (handy while testing the template).</summary>
     public bool KeepDocx { get; set; }
+    /// <summary>Make terms added from the posting bold and colored, so they're easy to spot while testing.</summary>
+    public bool HighlightAddedTerms { get; set; } = true;
+    /// <summary>Color for added terms as hex RGB (FF0000 = red).</summary>
+    public string HighlightColor { get; set; } = "FF0000";
 }
 
 public sealed record TailorRequest(Job Job, string JdText, string OutputDir);
