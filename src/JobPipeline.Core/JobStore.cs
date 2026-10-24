@@ -155,9 +155,10 @@ public sealed class JobStore
     /// Start of every apply run. Any job still in Applying means a previous run died mid-form and may or may
     /// not have submitted, so it goes to ActionNeeded instead of being retried. Then returns the ready queue.
     /// </summary>
-    public ApplyRun BeginApplyRun(int limit, string by = "apply")
+    public ApplyRun BeginApplyRun(int limit, IReadOnlyCollection<string>? manualApplyCompanies = null, string by = "apply")
     {
         limit = Math.Clamp(limit, 1, 100);
+        var manualList = manualApplyCompanies ?? Array.Empty<string>();
         return Mutate(db =>
         {
             var interrupted = new List<JobSummary>();
@@ -169,6 +170,17 @@ public sealed class JobStore
                 interrupted.Add(Summary(j, db));
             }
 
+            // Companies the user applies to personally: never auto-applied, handed over with the tailored resume.
+            var manual = new List<JobSummary>();
+            foreach (var j in db.Jobs.Where(j => j.Status == JobStatus.ReadyToApply))
+            {
+                if (ManualApplyMatch(j.Company, manualList) is not { } listed) continue;
+                j.ActionDesc = $"Manual apply: {j.Company} is on your manual-apply list ({listed}). Apply yourself" +
+                               (j.ResumePath is null ? "." : $"; tailored resume: {j.ResumePath}");
+                Move(j, JobStatus.ActionNeeded, by, "manual-apply company");
+                manual.Add(Summary(j, db));
+            }
+
             var ready = db.Jobs
                 .Where(j => j.Status == JobStatus.ReadyToApply)
                 .OrderByDescending(j => j.DatePosted ?? "")
@@ -177,15 +189,22 @@ public sealed class JobStore
                 .Select(j => Summary(j, db))
                 .ToList();
             var appliedToday = db.Jobs.Count(j => j.DateApplied is { } d && d.UtcDateTime.Date == Now.UtcDateTime.Date);
-            return (new ApplyRun(interrupted, ready, appliedToday), interrupted.Count > 0);
+            return (new ApplyRun(interrupted, manual, ready, appliedToday), interrupted.Count > 0 || manual.Count > 0);
         });
     }
 
+    /// <summary>The list entry a company matches, or null. See <see cref="Dedupe.CompanyMatches"/>.</summary>
+    public static string? ManualApplyMatch(string company, IEnumerable<string> manualApplyCompanies) =>
+        manualApplyCompanies.FirstOrDefault(m => Dedupe.CompanyMatches(company, m));
+
     /// <summary>Call immediately before opening the application. Re-runs never resubmit a job left in Applying.</summary>
-    public Job StartApply(Guid id, string by = "apply") => Mutate(db =>
+    public Job StartApply(Guid id, IReadOnlyCollection<string>? manualApplyCompanies = null, string by = "apply") => Mutate(db =>
     {
         var job = Get(db, id);
         Expect(job, JobStatus.ReadyToApply);
+        if (ManualApplyMatch(job.Company, manualApplyCompanies ?? Array.Empty<string>()) is { } listed)
+            throw new PipelineException(
+                $"{job.Company} is on the manual-apply list ({listed}); the user applies there personally. Don't apply.");
         job.ApplyAttempts++;
         Move(job, JobStatus.Applying, by, null);
         return (Clone(job), true);
@@ -219,6 +238,43 @@ public sealed class JobStore
         Expect(job, JobStatus.New, JobStatus.ReadyToApply, JobStatus.Applying, JobStatus.ActionNeeded, JobStatus.Failed);
         job.ActionDesc = reason;
         Move(job, outcome, by, reason);
+        return (Clone(job), true);
+    });
+
+    /// <summary>
+    /// Replaces a job's tech stack (e.g. re-extracted with better rules). Jobs not yet applied to whose resume is
+    /// already made (ReadyToApply, ActionNeeded, Failed) go back to New so the worker re-tailors with the new list.
+    /// </summary>
+    public (Job Job, bool Requeued) UpdateTechStack(Guid id, IEnumerable<string> techStack, string by = "you") => Mutate(db =>
+    {
+        var job = Get(db, id);
+        job.TechStack = techStack.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToList();
+        job.UpdatedAt = Now;
+        var requeue = job.Status is JobStatus.ReadyToApply or JobStatus.ActionNeeded or JobStatus.Failed;
+        if (requeue)
+        {
+            job.ResumePath = null;
+            job.ActionDesc = null;
+            job.LastError = null;
+            job.TailorAttempts = 0;
+            Move(job, JobStatus.New, by, "tech stack updated; re-tailor");
+        }
+        return ((Clone(job), requeue), true);
+    });
+
+    /// <summary>
+    /// Sends a job back to the worker for a fresh resume (e.g. after changing the template or tailor settings):
+    /// ReadyToApply, ActionNeeded or Failed → New. The old resume path is dropped; the old file is left on disk.
+    /// </summary>
+    public Job RequeueForTailoring(Guid id, string by = "you") => Mutate(db =>
+    {
+        var job = Get(db, id);
+        Expect(job, JobStatus.ReadyToApply, JobStatus.ActionNeeded, JobStatus.Failed);
+        job.ResumePath = null;
+        job.ActionDesc = null;
+        job.LastError = null;
+        job.TailorAttempts = 0;
+        Move(job, JobStatus.New, by, "re-tailor requested");
         return (Clone(job), true);
     });
 
@@ -430,6 +486,8 @@ public sealed class JobStore
                     date_posted     TEXT,
                     date_applied    TEXT,
                     interview_date  TEXT,
+                    resume_path     TEXT,
+                    resume_dir      TEXT,
                     created_at      TEXT NOT NULL,
                     updated_at      TEXT NOT NULL,
                     doc             TEXT NOT NULL
@@ -445,11 +503,34 @@ public sealed class JobStore
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
+                INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2');
                 """);
+            MigrateResumeColumns(conn, tx);
             ImportLegacyJson(conn, tx);
             tx.Commit();
         }
+    }
+
+    /// <summary>
+    /// Schema v2: resume_path / resume_dir as real columns (previously only inside the JSON doc). Adds them to an
+    /// older database and fills them in from each job's document.
+    /// </summary>
+    static void MigrateResumeColumns(SqliteConnection conn, SqliteTransaction tx)
+    {
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.Transaction = tx;
+            cmd.CommandText = "PRAGMA table_info(jobs)";
+            using var r = cmd.ExecuteReader();
+            while (r.Read()) columns.Add(r.GetString(1));
+        }
+        if (columns.Contains("resume_path") && columns.Contains("resume_dir")) return;
+        if (!columns.Contains("resume_path")) Exec(conn, tx, "ALTER TABLE jobs ADD COLUMN resume_path TEXT");
+        if (!columns.Contains("resume_dir")) Exec(conn, tx, "ALTER TABLE jobs ADD COLUMN resume_dir TEXT");
+        foreach (var job in LoadAll(conn, tx).Jobs)
+            Upsert(conn, tx, job, JsonSerializer.Serialize(job, Compact));
+        Exec(conn, tx, "UPDATE meta SET value = '2' WHERE key = 'schema_version'");
     }
 
     /// <summary>
@@ -500,15 +581,17 @@ public sealed class JobStore
         cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO jobs (id, status, company, title, source, dedupe_key, external_job_id, listing_url, apply_url,
-                              is_remote, is_easy_apply, date_posted, date_applied, interview_date, created_at, updated_at, doc)
+                              is_remote, is_easy_apply, date_posted, date_applied, interview_date, resume_path, resume_dir,
+                              created_at, updated_at, doc)
             VALUES ($id, $status, $company, $title, $source, $dedupe, $ext, $listing, $apply,
-                    $remote, $easy, $posted, $applied, $interview, $created, $updated, $doc)
+                    $remote, $easy, $posted, $applied, $interview, $resume, $resumeDir, $created, $updated, $doc)
             ON CONFLICT(id) DO UPDATE SET
                 status = excluded.status, company = excluded.company, title = excluded.title, source = excluded.source,
                 dedupe_key = excluded.dedupe_key, external_job_id = excluded.external_job_id,
                 listing_url = excluded.listing_url, apply_url = excluded.apply_url, is_remote = excluded.is_remote,
                 is_easy_apply = excluded.is_easy_apply, date_posted = excluded.date_posted,
                 date_applied = excluded.date_applied, interview_date = excluded.interview_date,
+                resume_path = excluded.resume_path, resume_dir = excluded.resume_dir,
                 updated_at = excluded.updated_at, doc = excluded.doc
             """;
         Add(cmd, "$id", j.Id.ToString());
@@ -525,6 +608,8 @@ public sealed class JobStore
         Add(cmd, "$posted", j.DatePosted);
         Add(cmd, "$applied", j.DateApplied?.ToString("O"));
         Add(cmd, "$interview", j.InterviewDate?.ToString("O"));
+        Add(cmd, "$resume", j.ResumePath);
+        Add(cmd, "$resumeDir", string.IsNullOrWhiteSpace(j.ResumePath) ? null : Path.GetDirectoryName(j.ResumePath));
         Add(cmd, "$created", j.CreatedAt.ToUniversalTime().ToString("O"));
         Add(cmd, "$updated", j.UpdatedAt.ToUniversalTime().ToString("O"));
         Add(cmd, "$doc", doc);
@@ -568,7 +653,8 @@ public sealed class PipelineException(string message) : Exception(message);
 
 public sealed record AddResult(Guid Id, string Result, JobStatus Status);
 
-public sealed record ApplyRun(IReadOnlyList<JobSummary> Interrupted, IReadOnlyList<JobSummary> Ready, int AppliedToday);
+public sealed record ApplyRun(
+    IReadOnlyList<JobSummary> Interrupted, IReadOnlyList<JobSummary> ManualApply, IReadOnlyList<JobSummary> Ready, int AppliedToday);
 
 public sealed record JobSummary(
     Guid Id, JobStatus Status, string Company, string Title, string? Location, bool? IsRemote, string? Salary,

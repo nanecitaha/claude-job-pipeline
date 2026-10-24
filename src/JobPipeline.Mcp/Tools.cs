@@ -18,15 +18,19 @@ public static class Tools
         new("get_config",
             "Read one of your pipeline config files. 'hunt' = target titles, similar titles, exclusions, sites to search " +
             "and apply rules. 'profile' = applicant answers for application forms (contact, authorization, salary, etc.). " +
-            "Read 'hunt' before every hunt and both before every apply run.",
+            "'resume' = the user's master (untailored) resume, the second source for form answers such as work history " +
+            "and years of experience. 'isSetUp' is false while a file still has [fill] fields or the resume placeholder. " +
+            "Read 'hunt' before every hunt, and all three before every apply run.",
             """
-            {"type":"object","properties":{"name":{"type":"string","enum":["hunt","profile"]}},"required":["name"]}
+            {"type":"object","properties":{"name":{"type":"string","enum":["hunt","profile","resume"]}},"required":["name"]}
             """,
             a =>
             {
                 var file = Configs.FileFor(Str(a, "name")!);
                 var path = Path.Combine(store.DataDir, file);
-                return new { path, content = File.ReadAllText(path) };
+                var content = File.Exists(path) ? File.ReadAllText(path) : "";
+                var isSetUp = content.Trim().Length > 0 && !content.Contains("[fill]") && !content.Contains(Configs.ResumePlaceholder);
+                return new { path, isSetUp, content };
             }),
 
         new("add_jobs",
@@ -41,7 +45,7 @@ public static class Tools
                 "source":{"type":"string","description":"Site it was found on: builtin, dice, wellfound, greenhouse, lever, ashby, linkedin, indeed, company"},
                 "company":{"type":"string"},
                 "title":{"type":"string","description":"Exactly as posted"},
-                "matchedTitle":{"type":"string","description":"Which target or similar title from the hunt config it matched"},
+                "matchedTitle":{"type":"string","description":"Which Keep rule from the hunt config it matched, in a few words"},
                 "listingUrl":{"type":"string","description":"URL of the listing where it was found"},
                 "applyUrl":{"type":"string","description":"Employer's own application page, when the listing links out"},
                 "externalJobId":{"type":"string","description":"Job/requisition id shown in the posting or URL"},
@@ -101,21 +105,24 @@ public static class Tools
         new("begin_apply_run",
             "Call once at the start of every apply run. Moves any job left in Applying by a crashed run to ActionNeeded " +
             "(it may already have been submitted, so it must not be retried automatically), then returns the jobs ready " +
-            "to apply, how many were applied today, and per job how many other applications went to the same company in 30 days.",
+            "to apply, how many were applied today, and per job how many other applications went to the same company in 30 days. " +
+            "Jobs at companies on the hunt config's manual-apply list are moved to ActionNeeded and returned in manualApply: " +
+            "never apply to those, by any URL.",
             """
             {"type":"object","properties":{"limit":{"type":"integer","description":"Max ready jobs to return (default 10)"}}}
             """,
-            a => store.BeginApplyRun(Int(a, "limit") ?? 10)),
+            a => store.BeginApplyRun(Int(a, "limit") ?? 10, Configs.ManualApplyCompanies(store.DataDir))),
 
         new("start_apply",
             "Call immediately before opening a job's application. Moves it ReadyToApply → Applying and returns the URLs " +
-            "and the absolute path of the tailored resume to upload. Fails if the job is not ReadyToApply.",
+            "and the absolute path of the tailored resume to upload. Fails if the job is not ReadyToApply or the company is on " +
+            "the manual-apply list.",
             """
             {"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}
             """,
             a =>
             {
-                var job = store.StartApply(Id(a));
+                var job = store.StartApply(Id(a), Configs.ManualApplyCompanies(store.DataDir));
                 return new
                 {
                     job.Id, job.Company, job.Title, job.ApplyUrl, job.ListingUrl, job.IsEasyApply, job.ResumePath,
@@ -154,6 +161,46 @@ public static class Tools
             {"type":"object","required":["id","outcome"],"properties":{"id":{"type":"string"},"outcome":{"type":"string","enum":["retry","applied","skip"]},"note":{"type":"string"}}}
             """,
             a => store.ResolveAction(Id(a), Parse<ResolveOutcome>(Str(a, "outcome")!), Str(a, "note"))),
+
+        new("update_tech_stack",
+            "Replace one job's tech stack, e.g. after re-extracting it from the saved job description (get_job with " +
+            "includeJd=true) using the job-hunt skill's extraction rules. Jobs not yet applied to whose resume is already " +
+            "made go back to New so the worker re-tailors with the new list. Keywords in order of first appearance, " +
+            "copied exactly as written.",
+            """
+            {"type":"object","required":["id","techStack"],"properties":{"id":{"type":"string"},"techStack":{"type":"array","items":{"type":"string"}}}}
+            """,
+            a =>
+            {
+                var terms = a.GetProperty("techStack").Deserialize<List<string>>(ArgOptions) ?? [];
+                var (job, requeued) = store.UpdateTechStack(Id(a), terms);
+                return new { job.Id, job.Company, job.Title, job.Status, job.TechStack, requeuedForTailoring = requeued };
+            }),
+
+        new("retailor_jobs",
+            "Send jobs back to the worker for a fresh tailored resume, e.g. after the user changed their resume " +
+            "template or tailor settings. Pass ids, or allReady=true for every ReadyToApply job. Works on ReadyToApply, " +
+            "ActionNeeded and Failed jobs; they return to New and the worker re-tailors them within a minute. " +
+            "Only call when the user asks.",
+            """
+            {"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"allReady":{"type":"boolean"}}}
+            """,
+            a =>
+            {
+                var ids = new List<Guid>();
+                if (a.TryGetProperty("ids", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    foreach (var e in arr.EnumerateArray())
+                        ids.Add(Guid.TryParse(e.GetString(), out var g) ? g : throw new ArgumentException($"'{e}' is not a job id"));
+                if (Bool(a, "allReady") == true)
+                    ids.AddRange(store.ListJobs(JobStatus.ReadyToApply, 500).Select(j => j.Id));
+                if (ids.Count == 0) throw new ArgumentException("Pass ids or allReady=true.");
+                var results = ids.Distinct().Select(id =>
+                {
+                    try { var j = store.RequeueForTailoring(id); return (object)new { j.Id, j.Company, j.Title, Result = "requeued" }; }
+                    catch (PipelineException ex) { return new { Id = id, Company = "", Title = "", Result = ex.Message }; }
+                }).ToList();
+                return new { results, stats = store.Stats() };
+            }),
 
         new("record_email",
             "Attach a Gmail message to a job (use find_jobs first). confirmation → Applied, rejection → Rejected, " +

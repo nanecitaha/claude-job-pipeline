@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\JobPipeline.Core\JobPipeline.Core.csproj" />
+    <ProjectReference Include="..\..\src\JobPipeline.Worker\JobPipeline.Worker.csproj" />
   </ItemGroup>
 </Project>

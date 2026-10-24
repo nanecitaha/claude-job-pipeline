@@ -12,6 +12,36 @@ public sealed class PipelineOptions
     public int MaxTailorAttempts { get; set; } = 3;
     /// <summary>A Tailoring claim older than this is assumed dead (crashed worker) and reclaimed.</summary>
     public int StaleClaimMinutes { get; set; } = 30;
+
+    /// <summary>Which tailor runs: "TechStack" (v1: fills tech-stack lines, saves PDF) or "CopyMaster" (copies the master resume).</summary>
+    public string Tailor { get; set; } = "CopyMaster";
+    /// <summary>
+    /// File name (no extension) for each tailored resume, e.g. "Jane_Doe_Resume". Each job has its own folder, so the
+    /// same name is fine. Optional {job} placeholder becomes company-title. Employers see this name.
+    /// </summary>
+    public string ResumeFileName { get; set; } = ResumeFiles.DefaultFileName;
+    /// <summary>Your resume as a Word .docx with {{ADD_MISSING}} at the end of each tech-stack line (TechStack tailor).</summary>
+    public string ResumeTemplatePath { get; set; } = "";
+    /// <summary>"Word" (Microsoft Word, needs a logged-in session) or "LibreOffice" (headless, works on servers).</summary>
+    public string PdfConverter { get; set; } = "Word";
+    /// <summary>Full path to soffice(.exe). Empty = default install location.</summary>
+    public string LibreOfficePath { get; set; } = "";
+    public int ConversionTimeoutSeconds { get; set; } = 120;
+    /// <summary>Keep the filled .docx next to the PDF (handy while testing the template).</summary>
+    public bool KeepDocx { get; set; }
+    /// <summary>Make terms added from the posting bold and colored, so they're easy to spot while testing.</summary>
+    public bool HighlightAddedTerms { get; set; } = true;
+    /// <summary>Color for added terms as hex RGB (FF0000 = red).</summary>
+    public string HighlightColor { get; set; } = "FF0000";
+    /// <summary>Font size in points for added terms (e.g. 10 or 10.5). 0 = same size as the line.</summary>
+    public double HighlightFontSize { get; set; }
+    /// <summary>
+    /// Replace {{LOCATION:Your City, ST}} with the job's city and state for on-site/hybrid jobs. Remote or unclear
+    /// locations keep your own. Off = always your own.
+    /// </summary>
+    public bool UpdateLocation { get; set; } = true;
+    /// <summary>How the job's location is written: "{location}" or e.g. "{home} · Relocating to {location}".</summary>
+    public string LocationFormat { get; set; } = "{location}";
 }
 
 public sealed record TailorRequest(Job Job, string JdText, string OutputDir);
@@ -28,8 +58,8 @@ public interface ITailor
 }
 
 /// <summary>
-/// Stand-in so the whole pipeline runs end to end today: copies the master resume under a per-job name and
-/// writes the posting's tech stack (exactly as captured) next to it for reference.
+/// Stand-in so the whole pipeline runs end to end: copies the master resume into the job's folder and writes the
+/// posting's tech stack (exactly as captured) next to it for reference.
 /// </summary>
 public sealed class CopyMasterResumeTailor(PipelineOptions options) : ITailor
 {
@@ -40,21 +70,11 @@ public sealed class CopyMasterResumeTailor(PipelineOptions options) : ITailor
             throw new FileNotFoundException($"Master resume not found: '{master}'. Set Pipeline:MasterResumePath in appsettings.json.");
 
         var job = request.Job;
-        var name = $"{Slug(job.Company)}-{Slug(job.Title)}-{job.Id.ToString()[..8]}";
-        var resume = Path.Combine(request.OutputDir, name + Path.GetExtension(master));
+        var dir = ResumeFiles.JobFolder(request.OutputDir, job);
+        var resume = Path.Combine(dir, ResumeFiles.FileName(options.ResumeFileName, job) + Path.GetExtension(master));
         File.Copy(master, resume, overwrite: true);
-
-        if (job.TechStack.Count > 0)
-            await File.WriteAllTextAsync(Path.Combine(request.OutputDir, name + ".keywords.txt"),
-                string.Join(", ", job.TechStack), ct);
+        await File.WriteAllTextAsync(Path.Combine(dir, ResumeFiles.TechStackFile), string.Join(", ", job.TechStack), ct);
 
         return new TailorResult(resume, "placeholder: master resume copied, not tailored");
-    }
-
-    static string Slug(string s)
-    {
-        var chars = s.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
-        var slug = string.Join('-', new string(chars).Split('-', StringSplitOptions.RemoveEmptyEntries));
-        return slug.Length > 40 ? slug[..40].TrimEnd('-') : slug;
     }
 }

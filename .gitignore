@@ -2,3 +2,7 @@ bin/
 obj/
 *.user
 .vs/
+resume.md
+applicant-profile.md
+__pycache__/
+appsettings.Local.json
