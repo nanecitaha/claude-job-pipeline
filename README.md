@@ -127,7 +127,16 @@ PDF shows:   C#, .NET, RabbitMQ, SQL Server, Azure, Kubernetes     (added terms 
 - Added terms are **bold and red** while `Pipeline:HighlightAddedTerms` is `true`, so they're easy to spot in
   test PDFs. `HighlightColor` sets the color (hex, `FF0000` = red) and `HighlightFontSize` the size in points
   (e.g. `10.5`; `0` = same as the line). Set `HighlightAddedTerms` to `false` for normal-looking output.
-- Next to each PDF, `<name>.tech-added.txt` lists what was added to each line.
+- Each job gets its own folder under `data\resumes\`:
+  ```
+  resumes\draftkings-senior-platform-engineer-2c0453c6\
+    Resume(tailored for draftkings-senior-platform-engineer).pdf
+    techstack.txt        <- the job's tech stack as captured by the hunt, one comma-separated line
+  ```
+  The file name comes from `Pipeline:ResumeFileName` (`{job}` = company-title). Employers see it, so for real
+  applications something like `Jane_Doe_Resume` reads better.
+- Changed the template or settings? Ask Claude to *"re-tailor all ready jobs"* (or name specific ones): they go
+  back to the worker for a fresh resume.
 
 > v1 adds **every** missing posting term, including ones you may not have. Use it to test the pipeline; don't
 > send these resumes on real applications until relevance filtering exists.
@@ -143,6 +152,12 @@ Setup:
    - `LibreOffice`: headless and free; works on a server with nobody logged in.
      Install it, or set `Pipeline:LibreOfficePath` to `soffice.exe`.
 3. `Pipeline:KeepDocx: true` keeps the filled `.docx` next to the PDF while you tune the template.
+4. **Personal settings** (your name in `ResumeFileName`, other paths): put them in
+   `C:\JobPipeline\bin\worker\appsettings.Local.json`, which overrides `appsettings.json`, isn't in the repo,
+   and survives re-publishing:
+   ```json
+   { "Pipeline": { "ResumeFileName": "Jane_Doe_Resume(tailored for {job})" } }
+   ```
 
 Errors (template missing, no `{{ADD_MISSING}}` tags, conversion failure) fail the attempt with the reason in the
 job's `lastError`; after `MaxTailorAttempts` the job goes to `Failed`.
