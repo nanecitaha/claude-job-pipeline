@@ -7,6 +7,9 @@ is handed back to you with the reason instead of guessed.
 
 Runs on a Claude subscription (Claude desktop + this local MCP server); no API key needed.
 
+**New here? Follow [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md)**: every command from a fresh Windows PC
+to your first tailored resume, plus what to say to Claude.
+
 > **Use responsibly.** You are responsible for following each job site's terms of service. Automating some
 > sites (LinkedIn in particular) can get accounts restricted; it's off by default. Start in review mode and
 > read what gets submitted in your name.
