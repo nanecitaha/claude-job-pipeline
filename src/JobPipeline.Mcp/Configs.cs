@@ -83,9 +83,11 @@ public static class Configs
 
         ## Sites (searched in this order)
         Paste each site's search URL with your filters already applied (remote, senior, posted recently).
+        Test a URL in the browser first: some filters look applied but aren't (builtin's /net/ path segment, for
+        one, returns general engineering jobs; its ?search= keyword works).
         | name    | search url                                                         | pages |
         |---------|--------------------------------------------------------------------|-------|
-        | builtin | https://builtin.com/jobs/remote/dev-engineering/net/senior         | 3     |
+        | builtin | https://builtin.com/jobs/remote/dev-engineering/senior?search=C%23%20.NET | 3 |
 
         ## Company boards (optional, read via their public JSON)
         - greenhouse:
