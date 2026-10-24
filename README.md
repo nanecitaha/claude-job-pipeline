@@ -81,10 +81,16 @@ because it may already have been submitted.
    }
    ```
    First start creates `C:\JobPipeline\data` with `hunt-config.md` and `applicant-profile.md`.
-5. **Fill the configs**: every `[fill]` in `applicant-profile.md` (apply refuses to run until they're done), and
-   your site search URLs in `hunt-config.md`. builtin is already listed first.
+5. **Fill the configs** in the data folder:
+   - `applicant-profile.md`: every `[fill]` (apply refuses to run until they're done).
+   - `resume.md`: paste your **master** (untailored) resume as plain text or Markdown. After the profile, it's
+     Claude's source for work history and "years of experience with X" questions. Only list what you'd defend
+     in an interview. It stays in your data folder; don't commit it.
+   - `hunt-config.md`: your site search URLs. builtin is already listed first.
 6. **Run the worker** so it survives reboots: Task Scheduler → Create Task → trigger "At startup" →
-   action `C:\JobPipeline\bin\worker\JobPipeline.Worker.exe`, "Run whether user is logged on or not".
+   action `C:\JobPipeline\bin\worker\JobPipeline.Worker.exe`. With `PdfConverter: Word`, choose
+   "Run only when user is logged on" (Word needs a logged-in session); with `LibreOffice`, "Run whether user is
+   logged on or not" works. For a quick test, just run the exe in a console.
    (Or as a real Windows Service: add `Microsoft.Extensions.Hosting.WindowsServices`, uncomment
    `AddWindowsService` in `Program.cs`, then `sc create`.)
 7. **Skills**: save `skills/job-hunt`, `skills/job-apply`, `skills/job-email-sync` in Claude.
@@ -155,7 +161,7 @@ tests/e2e                    MCP stdio + worker processes end to end (CI runs bo
 skills/                  job-hunt, job-apply, job-email-sync
 ```
 
-Data folder: `jobs.db` (+ its `-wal`/`-shm` files), `resumes/`, `hunt-config.md`, `applicant-profile.md`.
+Data folder: `jobs.db` (+ its `-wal`/`-shm` files), `resumes/`, `hunt-config.md`, `applicant-profile.md`, `resume.md`.
 Browse it with any SQLite tool (DB Browser for SQLite, `sqlite3`); for edits, stop the worker and Claude first or
 go through the MCP tools. Back it up with `sqlite3 jobs.db ".backup jobs-backup.db"` (safe while running).
 Upgrading from the earlier `jobs.json` store: the first start imports it and renames it `jobs.json.imported`.

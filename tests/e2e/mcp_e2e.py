@@ -28,6 +28,13 @@ print("unknown method:", rpc("bogus/method")["error"])
 
 err, cfg = call("get_config", {"name": "hunt"})
 print("hunt config starts:", cfg["content"].splitlines()[0])
+err, res = call("get_config", {"name": "resume"})
+assert not err and res["isSetUp"] is False and res["path"].endswith("resume.md"), res
+err, prof = call("get_config", {"name": "profile"})
+assert not err and prof["isSetUp"] is False, "profile with [fill] fields must report isSetUp false"
+open(res["path"], "w").write("# Jane Doe\n## Experience\nAcme 2020 to present: C#, .NET 8\n")
+assert call("get_config", {"name": "resume"})[1]["isSetUp"] is True
+print("resume config: placeholder -> isSetUp false, filled -> true")
 
 jd = "Senior Backend Engineer. Must know C#, .NET 8, ASP.NET Core, RabbitMQ, SQL Server, Azure."
 err, added = call("add_jobs", {"jobs": [

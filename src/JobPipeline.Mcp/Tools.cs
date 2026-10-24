@@ -18,15 +18,19 @@ public static class Tools
         new("get_config",
             "Read one of your pipeline config files. 'hunt' = target titles, similar titles, exclusions, sites to search " +
             "and apply rules. 'profile' = applicant answers for application forms (contact, authorization, salary, etc.). " +
-            "Read 'hunt' before every hunt and both before every apply run.",
+            "'resume' = the user's master (untailored) resume, the second source for form answers such as work history " +
+            "and years of experience. 'isSetUp' is false while a file still has [fill] fields or the resume placeholder. " +
+            "Read 'hunt' before every hunt, and all three before every apply run.",
             """
-            {"type":"object","properties":{"name":{"type":"string","enum":["hunt","profile"]}},"required":["name"]}
+            {"type":"object","properties":{"name":{"type":"string","enum":["hunt","profile","resume"]}},"required":["name"]}
             """,
             a =>
             {
                 var file = Configs.FileFor(Str(a, "name")!);
                 var path = Path.Combine(store.DataDir, file);
-                return new { path, content = File.ReadAllText(path) };
+                var content = File.Exists(path) ? File.ReadAllText(path) : "";
+                var isSetUp = content.Trim().Length > 0 && !content.Contains("[fill]") && !content.Contains(Configs.ResumePlaceholder);
+                return new { path, isSetUp, content };
             }),
 
         new("add_jobs",

@@ -7,13 +7,15 @@ public static class Configs
     {
         "hunt" => "hunt-config.md",
         "profile" => "applicant-profile.md",
-        _ => throw new ArgumentException("name must be 'hunt' or 'profile'"),
+        "resume" => "resume.md",
+        _ => throw new ArgumentException("name must be 'hunt', 'profile' or 'resume'"),
     };
 
     public static void EnsureDefaults(string dataDir)
     {
         Write(Path.Combine(dataDir, "hunt-config.md"), Hunt);
         Write(Path.Combine(dataDir, "applicant-profile.md"), Profile);
+        Write(Path.Combine(dataDir, "resume.md"), Resume);
     }
 
     static void Write(string path, string content)
@@ -100,6 +102,14 @@ public static class Configs
         ## Education
         - Degree, school, year: [fill]
 
+        ## Common questions
+        Answers to questions forms often ask. Add each new question Claude flags here, then "retry" the job.
+        - How did you hear about us: Job board
+        - Notice period: [fill]
+        - Comfortable with on-call: [fill]
+        - Willing to work Pacific time hours: [fill]
+        - Open to contract roles: [fill]
+
         ## Voluntary self-identification (EEO)
         - Answer: Decline to self-identify
 
@@ -108,4 +118,18 @@ public static class Configs
         - Background or reference check consent
         - Anything asking for a password
         """;
+
+    /// <summary>Marker the apply skill checks for: while it's present, resume.md is treated as not set up.</summary>
+    public const string ResumePlaceholder = "[paste your master resume here]";
+
+    const string Resume = """
+        # Master resume
+        Your real, untailored resume as plain text or Markdown: roles with dates, each role's tech stack, bullets,
+        skills, education. Claude answers application questions from this (after applicant-profile.md), e.g.
+        work history, "years of experience with X", "have you used X". It never reads the tailored PDFs.
+        Only list what you can defend in an interview: anything here can become a "yes" on a form.
+
+        [paste your master resume here]
+        """;
 }
+
