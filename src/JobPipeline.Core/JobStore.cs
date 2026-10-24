@@ -242,6 +242,27 @@ public sealed class JobStore
     });
 
     /// <summary>
+    /// Replaces a job's tech stack (e.g. re-extracted with better rules). Jobs not yet applied to whose resume is
+    /// already made (ReadyToApply, ActionNeeded, Failed) go back to New so the worker re-tailors with the new list.
+    /// </summary>
+    public (Job Job, bool Requeued) UpdateTechStack(Guid id, IEnumerable<string> techStack, string by = "you") => Mutate(db =>
+    {
+        var job = Get(db, id);
+        job.TechStack = techStack.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToList();
+        job.UpdatedAt = Now;
+        var requeue = job.Status is JobStatus.ReadyToApply or JobStatus.ActionNeeded or JobStatus.Failed;
+        if (requeue)
+        {
+            job.ResumePath = null;
+            job.ActionDesc = null;
+            job.LastError = null;
+            job.TailorAttempts = 0;
+            Move(job, JobStatus.New, by, "tech stack updated; re-tailor");
+        }
+        return ((Clone(job), requeue), true);
+    });
+
+    /// <summary>
     /// Sends a job back to the worker for a fresh resume (e.g. after changing the template or tailor settings):
     /// ReadyToApply, ActionNeeded or Failed → New. The old resume path is dropped; the old file is left on disk.
     /// </summary>

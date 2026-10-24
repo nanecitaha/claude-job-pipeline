@@ -335,6 +335,24 @@ Test("database: an older database without the resume columns is upgraded and bac
     Eq(JobStatus.ReadyToApply, reopened.GetJob(id)!.Status);
 });
 
+Test("tech stack update: replaces the list; re-queues unapplied tailored jobs, leaves applied ones", () =>
+{
+    var s = new JobStore(NewDir());
+    var ready = ReadyJob(s);
+    var (job, requeued) = s.UpdateTechStack(ready, ["C#.NET", "Bazel/Pants/Buck", " ", "C#.NET", "unit testing"]);
+    Eq("C#.NET|Bazel/Pants/Buck|unit testing", string.Join("|", job.TechStack));
+    Eq(true, requeued);
+    Eq(JobStatus.New, job.Status);
+    Eq<string?>(null, job.ResumePath);
+
+    var applied = ReadyJob(s, "Beta LLC", "https://builtin.com/job/b");
+    s.StartApply(applied); s.MarkApplied(applied);
+    var (after, requeuedApplied) = s.UpdateTechStack(applied, ["Go"]);
+    Eq(false, requeuedApplied);
+    Eq(JobStatus.Applied, after.Status);
+    Eq("Go", string.Join("|", after.TechStack));
+});
+
 var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;

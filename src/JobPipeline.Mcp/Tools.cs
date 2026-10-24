@@ -162,6 +162,21 @@ public static class Tools
             """,
             a => store.ResolveAction(Id(a), Parse<ResolveOutcome>(Str(a, "outcome")!), Str(a, "note"))),
 
+        new("update_tech_stack",
+            "Replace one job's tech stack, e.g. after re-extracting it from the saved job description (get_job with " +
+            "includeJd=true) using the job-hunt skill's extraction rules. Jobs not yet applied to whose resume is already " +
+            "made go back to New so the worker re-tailors with the new list. Keywords in order of first appearance, " +
+            "copied exactly as written.",
+            """
+            {"type":"object","required":["id","techStack"],"properties":{"id":{"type":"string"},"techStack":{"type":"array","items":{"type":"string"}}}}
+            """,
+            a =>
+            {
+                var terms = a.GetProperty("techStack").Deserialize<List<string>>(ArgOptions) ?? [];
+                var (job, requeued) = store.UpdateTechStack(Id(a), terms);
+                return new { job.Id, job.Company, job.Title, job.Status, job.TechStack, requeuedForTailoring = requeued };
+            }),
+
         new("retailor_jobs",
             "Send jobs back to the worker for a fresh tailored resume, e.g. after the user changed their resume " +
             "template or tailor settings. Pass ids, or allReady=true for every ReadyToApply job. Works on ReadyToApply, " +
