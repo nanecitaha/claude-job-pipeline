@@ -16,8 +16,8 @@ public sealed class PipelineOptions
     /// <summary>Which tailor runs: "TechStack" (v1: fills tech-stack lines, saves PDF) or "CopyMaster" (copies the master resume).</summary>
     public string Tailor { get; set; } = "CopyMaster";
     /// <summary>
-    /// File name (no extension) for each tailored resume; {job} becomes company-title. Employers see this name.
-    /// Example: "Jane_Doe_Resume(tailored for {job})" or just "Jane_Doe_Resume".
+    /// File name (no extension) for each tailored resume, e.g. "Jane_Doe_Resume". Each job has its own folder, so the
+    /// same name is fine. Optional {job} placeholder becomes company-title. Employers see this name.
     /// </summary>
     public string ResumeFileName { get; set; } = ResumeFiles.DefaultFileName;
     /// <summary>Your resume as a Word .docx with {{ADD_MISSING}} at the end of each tech-stack line (TechStack tailor).</summary>

@@ -108,7 +108,8 @@ public static class TailorTests
         Test("tailor: file name pattern defaults, drops characters Windows forbids", () =>
         {
             var job = new Job { Id = Guid.NewGuid(), Company = "Acme Inc.", Title = "Senior Backend Engineer" };
-            Eq("Resume(tailored for acme-inc-senior-backend-engineer)", ResumeFiles.FileName(null, job));
+            Eq("Resume", ResumeFiles.FileName(null, job));
+            Eq("Resume(tailored for acme-inc-senior-backend-engineer)", ResumeFiles.FileName("Resume(tailored for {job})", job));
             Eq("Jane_Doe_Resume", ResumeFiles.FileName("Jane_Doe_Resume", job));
             Eq("AB for acme-inc-senior-backend-engineer", ResumeFiles.FileName("A<B> for {JOB}:?", job));
             return Task.CompletedTask;

@@ -73,7 +73,7 @@ public sealed class TechStackTailor(PipelineOptions options, IPdfConverter conve
 public static class ResumeFiles
 {
     public const string TechStackFile = "techstack.txt";
-    public const string DefaultFileName = "Resume(tailored for {job})";
+    public const string DefaultFileName = "Resume";
 
     /// <summary>Folder name for a job's files: company-title-idprefix (unique per job).</summary>
     public static string BaseName(JobPipeline.Core.Job job) => $"{JobSlug(job)}-{job.Id.ToString()[..8]}";

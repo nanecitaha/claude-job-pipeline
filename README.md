@@ -130,11 +130,11 @@ PDF shows:   C#, .NET, RabbitMQ, SQL Server, Azure, Kubernetes     (added terms 
 - Each job gets its own folder under `data\resumes\`:
   ```
   resumes\draftkings-senior-platform-engineer-2c0453c6\
-    Resume(tailored for draftkings-senior-platform-engineer).pdf
+    Resume.pdf
     techstack.txt        <- the job's tech stack as captured by the hunt, one comma-separated line
   ```
-  The file name comes from `Pipeline:ResumeFileName` (`{job}` = company-title). Employers see it, so for real
-  applications something like `Jane_Doe_Resume` reads better.
+  The file name comes from `Pipeline:ResumeFileName` (e.g. `Jane_Doe_Resume`; employers see it). The folder keeps
+  jobs apart, so every job can use the same name. `{job}` in the name is replaced with company-title if you want it.
 - Changed the template or settings? Ask Claude to *"re-tailor all ready jobs"* (or name specific ones): they go
   back to the worker for a fresh resume.
 
@@ -156,7 +156,7 @@ Setup:
    `C:\JobPipeline\bin\worker\appsettings.Local.json`, which overrides `appsettings.json`, isn't in the repo,
    and survives re-publishing:
    ```json
-   { "Pipeline": { "ResumeFileName": "Jane_Doe_Resume(tailored for {job})" } }
+   { "Pipeline": { "ResumeFileName": "Jane_Doe_Resume" } }
    ```
 
 Errors (template missing, no `{{ADD_MISSING}}` tags, conversion failure) fail the attempt with the reason in the
