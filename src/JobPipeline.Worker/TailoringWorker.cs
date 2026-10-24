@@ -36,7 +36,7 @@ public sealed class TailoringWorker(JobStore store, ITailor tailor, IOptions<Pip
         var job = store.ClaimForTailoring(TimeSpan.FromMinutes(_o.StaleClaimMinutes));
         if (job is null) return false;
 
-        log.LogInformation("Tailoring {Company} – {Title} ({Id}), attempt {Attempt}", job.Company, job.Title, job.Id, job.TailorAttempts);
+        log.LogInformation("Tailoring {Company} - {Title} ({Id}), attempt {Attempt}", job.Company, job.Title, job.Id, job.TailorAttempts);
         try
         {
             var jd = store.ReadJd(job);
@@ -49,7 +49,7 @@ public sealed class TailoringWorker(JobStore store, ITailor tailor, IOptions<Pip
                 throw new InvalidOperationException($"Tailor returned a path that does not exist: {result.ResumePath}");
 
             store.CompleteTailoring(job.Id, Path.GetFullPath(result.ResumePath), result.Note);
-            log.LogInformation("Ready to apply: {Company} – {Title} → {Resume}", job.Company, job.Title, result.ResumePath);
+            log.LogInformation("Ready to apply: {Company} - {Title} -> {Resume}", job.Company, job.Title, result.ResumePath);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
