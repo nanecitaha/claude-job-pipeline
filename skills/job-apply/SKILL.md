@@ -30,6 +30,9 @@ Nothing else is a source. Anything neither file answers is flagged, never guesse
 Call `begin_apply_run` with `limit` = `daily_cap` minus `appliedToday` (stop if that's 0).
 - `interrupted`: jobs a previous run left mid-form. They're now ActionNeeded; list them in the report. Never
   retry them yourself; they may already have been submitted.
+- `manualApply`: jobs at companies on the user's manual-apply list (e.g. FAANG). They're now ActionNeeded with
+  the tailored resume path; list them in the report. Never apply to these companies, through any site or URL,
+  even if one reaches you another way.
 - `ready`: the queue for this run.
 
 ## 3. For each ready job, in order
@@ -68,5 +71,5 @@ Never enter payment details, SSN, date of birth or ID numbers, and never accept 
 own submit (no background-check or marketing consents that aren't required).
 
 ## 4. Report
-Applied (company, title), flagged with each reason, closed with reason, interrupted from earlier runs, and how
-many remain ReadyToApply.
+Applied (company, title), flagged with each reason, manual-apply jobs handed over (company, title, resume path),
+closed with reason, interrupted from earlier runs, and how many remain ReadyToApply.

@@ -11,6 +11,35 @@ public static class Configs
         _ => throw new ArgumentException("name must be 'hunt', 'profile' or 'resume'"),
     };
 
+    /// <summary>
+    /// The "- Company" lines under the "## Manual-apply companies" heading of hunt-config.md (empty if absent).
+    /// Read on every apply call, so edits take effect without restarting anything.
+    /// </summary>
+    public static IReadOnlyList<string> ManualApplyCompanies(string dataDir)
+    {
+        var path = Path.Combine(dataDir, "hunt-config.md");
+        if (!File.Exists(path)) return Array.Empty<string>();
+        var list = new List<string>();
+        var inSection = false;
+        foreach (var raw in File.ReadLines(path))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith('#'))
+            {
+                var heading = line.TrimStart('#').Trim().ToLowerInvariant();
+                inSection = heading.StartsWith("manual-apply") || heading.StartsWith("manual apply");
+                continue;
+            }
+            if (!inSection || !line.StartsWith("- ")) continue;
+            var name = line[2..];
+            var comment = name.IndexOf('#');
+            if (comment >= 0) name = name[..comment];
+            name = name.Trim();
+            if (name.Length > 0 && name != "[fill]") list.Add(name);
+        }
+        return list;
+    }
+
     public static void EnsureDefaults(string dataDir)
     {
         Write(Path.Combine(dataDir, "hunt-config.md"), Hunt);
@@ -62,6 +91,22 @@ public static class Configs
         - greenhouse:
         - lever:
         - ashby:
+
+        ## Manual-apply companies
+        Never auto-applied. Their jobs are still found and tailored, then handed to you as ActionNeeded with the
+        resume path. One company per line; "Amazon" also covers "Amazon Web Services", but not "Amazonia".
+        - Meta
+        - Facebook
+        - Apple
+        - Amazon
+        - AWS
+        - Netflix
+        - Google
+        - Alphabet
+        - YouTube
+        - Microsoft
+        - Nvidia
+        - OpenAI
 
         ## Apply rules
         - daily_cap: 10

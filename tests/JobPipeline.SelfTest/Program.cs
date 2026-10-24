@@ -264,6 +264,32 @@ Test("database file and job descriptions live in the data folder", () =>
     Eq("We need C# and .NET 8.", s.ReadJd(s.GetJob(id)!));
 });
 
+Test("manual-apply: company matching covers suffixes and longer names, not longer words", () =>
+{
+    Eq(true, Dedupe.CompanyMatches("Google LLC", "Google"));
+    Eq(true, Dedupe.CompanyMatches("Amazon Web Services, Inc.", "Amazon"));
+    Eq(true, Dedupe.CompanyMatches("Meta Platforms, Inc.", "meta"));
+    Eq(false, Dedupe.CompanyMatches("Metabase", "Meta"));
+    Eq(false, Dedupe.CompanyMatches("Applied Materials", "Apple"));
+    Eq(false, Dedupe.CompanyMatches("Acme", ""));
+});
+
+Test("manual-apply: listed companies are handed to the user, never started", () =>
+{
+    var s = new JobStore(NewDir());
+    var google = ReadyJob(s, "Google LLC", "https://g/1");
+    var acme = ReadyJob(s, "Acme Inc.", "https://a/1");
+    var list = new[] { "Google", "Meta" };
+    Throws<PipelineException>(() => s.StartApply(google, list), "manual-apply");
+    var run = s.BeginApplyRun(10, list);
+    Eq(1, run.ManualApply.Count);
+    Eq(google, run.ManualApply[0].Id);
+    Eq(JobStatus.ActionNeeded, s.GetJob(google)!.Status);
+    if (!s.GetJob(google)!.ActionDesc!.Contains("/tmp/resume.pdf")) throw new Exception("resume path missing from handover");
+    Eq(acme, run.Ready.Single().Id);
+    Eq(JobStatus.Applied, s.ResolveAction(google, ResolveOutcome.Applied, "applied myself").Status);
+});
+
 var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;

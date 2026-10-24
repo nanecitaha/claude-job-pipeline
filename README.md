@@ -86,7 +86,9 @@ because it may already have been submitted.
    - `resume.md`: paste your **master** (untailored) resume as plain text or Markdown. After the profile, it's
      Claude's source for work history and "years of experience with X" questions. Only list what you'd defend
      in an interview. It stays in your data folder; don't commit it.
-   - `hunt-config.md`: your site search URLs. builtin is already listed first.
+   - `hunt-config.md`: your site search URLs (builtin is already listed first), and the **Manual-apply
+     companies** list (FAANG etc. by default). Jobs there are still found and tailored, but never auto-applied:
+     they go to ActionNeeded with the resume path so you apply yourself. Edits take effect on the next apply run.
 6. **Run the worker** so it survives reboots: Task Scheduler → Create Task → trigger "At startup" →
    action `C:\JobPipeline\bin\worker\JobPipeline.Worker.exe`. With `PdfConverter: Word`, choose
    "Run only when user is logged on" (Word needs a logged-in session); with `LibreOffice`, "Run whether user is

@@ -105,21 +105,24 @@ public static class Tools
         new("begin_apply_run",
             "Call once at the start of every apply run. Moves any job left in Applying by a crashed run to ActionNeeded " +
             "(it may already have been submitted, so it must not be retried automatically), then returns the jobs ready " +
-            "to apply, how many were applied today, and per job how many other applications went to the same company in 30 days.",
+            "to apply, how many were applied today, and per job how many other applications went to the same company in 30 days. " +
+            "Jobs at companies on the hunt config's manual-apply list are moved to ActionNeeded and returned in manualApply: " +
+            "never apply to those, by any URL.",
             """
             {"type":"object","properties":{"limit":{"type":"integer","description":"Max ready jobs to return (default 10)"}}}
             """,
-            a => store.BeginApplyRun(Int(a, "limit") ?? 10)),
+            a => store.BeginApplyRun(Int(a, "limit") ?? 10, Configs.ManualApplyCompanies(store.DataDir))),
 
         new("start_apply",
             "Call immediately before opening a job's application. Moves it ReadyToApply → Applying and returns the URLs " +
-            "and the absolute path of the tailored resume to upload. Fails if the job is not ReadyToApply.",
+            "and the absolute path of the tailored resume to upload. Fails if the job is not ReadyToApply or the company is on " +
+            "the manual-apply list.",
             """
             {"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}
             """,
             a =>
             {
-                var job = store.StartApply(Id(a));
+                var job = store.StartApply(Id(a), Configs.ManualApplyCompanies(store.DataDir));
                 return new
                 {
                     job.Id, job.Company, job.Title, job.ApplyUrl, job.ListingUrl, job.IsEasyApply, job.ResumePath,

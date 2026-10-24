@@ -155,9 +155,10 @@ public sealed class JobStore
     /// Start of every apply run. Any job still in Applying means a previous run died mid-form and may or may
     /// not have submitted, so it goes to ActionNeeded instead of being retried. Then returns the ready queue.
     /// </summary>
-    public ApplyRun BeginApplyRun(int limit, string by = "apply")
+    public ApplyRun BeginApplyRun(int limit, IReadOnlyCollection<string>? manualApplyCompanies = null, string by = "apply")
     {
         limit = Math.Clamp(limit, 1, 100);
+        var manualList = manualApplyCompanies ?? Array.Empty<string>();
         return Mutate(db =>
         {
             var interrupted = new List<JobSummary>();
@@ -169,6 +170,17 @@ public sealed class JobStore
                 interrupted.Add(Summary(j, db));
             }
 
+            // Companies the user applies to personally: never auto-applied, handed over with the tailored resume.
+            var manual = new List<JobSummary>();
+            foreach (var j in db.Jobs.Where(j => j.Status == JobStatus.ReadyToApply))
+            {
+                if (ManualApplyMatch(j.Company, manualList) is not { } listed) continue;
+                j.ActionDesc = $"Manual apply: {j.Company} is on your manual-apply list ({listed}). Apply yourself" +
+                               (j.ResumePath is null ? "." : $"; tailored resume: {j.ResumePath}");
+                Move(j, JobStatus.ActionNeeded, by, "manual-apply company");
+                manual.Add(Summary(j, db));
+            }
+
             var ready = db.Jobs
                 .Where(j => j.Status == JobStatus.ReadyToApply)
                 .OrderByDescending(j => j.DatePosted ?? "")
@@ -177,15 +189,22 @@ public sealed class JobStore
                 .Select(j => Summary(j, db))
                 .ToList();
             var appliedToday = db.Jobs.Count(j => j.DateApplied is { } d && d.UtcDateTime.Date == Now.UtcDateTime.Date);
-            return (new ApplyRun(interrupted, ready, appliedToday), interrupted.Count > 0);
+            return (new ApplyRun(interrupted, manual, ready, appliedToday), interrupted.Count > 0 || manual.Count > 0);
         });
     }
 
+    /// <summary>The list entry a company matches, or null. See <see cref="Dedupe.CompanyMatches"/>.</summary>
+    public static string? ManualApplyMatch(string company, IEnumerable<string> manualApplyCompanies) =>
+        manualApplyCompanies.FirstOrDefault(m => Dedupe.CompanyMatches(company, m));
+
     /// <summary>Call immediately before opening the application. Re-runs never resubmit a job left in Applying.</summary>
-    public Job StartApply(Guid id, string by = "apply") => Mutate(db =>
+    public Job StartApply(Guid id, IReadOnlyCollection<string>? manualApplyCompanies = null, string by = "apply") => Mutate(db =>
     {
         var job = Get(db, id);
         Expect(job, JobStatus.ReadyToApply);
+        if (ManualApplyMatch(job.Company, manualApplyCompanies ?? Array.Empty<string>()) is { } listed)
+            throw new PipelineException(
+                $"{job.Company} is on the manual-apply list ({listed}); the user applies there personally. Don't apply.");
         job.ApplyAttempts++;
         Move(job, JobStatus.Applying, by, null);
         return (Clone(job), true);
@@ -568,7 +587,8 @@ public sealed class PipelineException(string message) : Exception(message);
 
 public sealed record AddResult(Guid Id, string Result, JobStatus Status);
 
-public sealed record ApplyRun(IReadOnlyList<JobSummary> Interrupted, IReadOnlyList<JobSummary> Ready, int AppliedToday);
+public sealed record ApplyRun(
+    IReadOnlyList<JobSummary> Interrupted, IReadOnlyList<JobSummary> ManualApply, IReadOnlyList<JobSummary> Ready, int AppliedToday);
 
 public sealed record JobSummary(
     Guid Id, JobStatus Status, string Company, string Title, string? Location, bool? IsRemote, string? Salary,

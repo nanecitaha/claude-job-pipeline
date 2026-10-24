@@ -44,6 +44,7 @@ err, added = call("add_jobs", {"jobs": [
    "techStack": ["C#", ".NET 8", "ASP.NET Core", "RabbitMQ", "SQL Server", "Azure"], "datePosted": "2026-10-21", "jdText": jd},
   {"source": "builtin", "company": "Globex", "title": "Senior .NET Developer", "listingUrl": "https://builtin.com/job/globex/2", "jdText": jd},
   {"source": "linkedin", "company": "ACME, Inc", "title": "Sr. Back-End Engineer (.NET)", "listingUrl": "https://linkedin.com/jobs/view/77", "jdText": jd},
+  {"source": "builtin", "company": "Google LLC", "title": "Senior Software Engineer, .NET", "listingUrl": "https://builtin.com/job/google/3", "jdText": jd},
 ]})
 print("add_jobs:", [(r["company"], r["result"]) for r in added["results"]], added["stats"]["New"], "new")
 err, msg = call("add_jobs", {"jobs": [{"source": "x", "company": "", "title": "t", "listingUrl": "u", "jdText": "j"}]})
@@ -55,11 +56,15 @@ worker = subprocess.Popen(["dotnet", os.path.join("src","JobPipeline.Worker","bi
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 for _ in range(60):
     time.sleep(0.5)
-    if call("pipeline_stats", {})[1]["ReadyToApply"] == 2: break
+    if call("pipeline_stats", {})[1]["ReadyToApply"] == 3: break
 worker.terminate(); wlog = worker.communicate(timeout=10)[0]
 print("worker log:", [l.strip() for l in wlog.splitlines() if "Ready to apply" in l])
 
 err, run = call("begin_apply_run", {"limit": 5})
+assert [j["company"] for j in run["manualApply"]] == ["Google LLC"], run["manualApply"]
+assert run["manualApply"][0]["status"] == "ActionNeeded" and "manual-apply list" in run["manualApply"][0]["actionDesc"]
+assert "Google LLC" not in [j["company"] for j in run["ready"]]
+print("manual-apply: Google LLC handed over, not queued:", run["manualApply"][0]["actionDesc"][:60])
 print("ready:", [(j["company"], j["status"]) for j in run["ready"]], "interrupted:", len(run["interrupted"]))
 acme = next(j for j in run["ready"] if j["company"] == "Acme Inc.")
 glob = next(j for j in run["ready"] if j["company"] == "Globex")
@@ -85,7 +90,7 @@ print("resolve retry:", rs["status"])
 print("bad arg:", call("list_jobs", {"status": "Nope"})[1][:50])
 print("stats:", {k: v for k, v in call("pipeline_stats", {})[1].items() if v})
 stats = call("pipeline_stats", {})[1]
-assert stats["Interviewing"] == 1 and stats["ReadyToApply"] == 1, stats
+assert stats["Interviewing"] == 1 and stats["ReadyToApply"] == 1 and stats["ActionNeeded"] == 1, stats
 print("E2E PASS")
 mcp.stdin.close(); mcp.wait(timeout=10)
 print("mcp stderr:", mcp.stderr.read().strip())

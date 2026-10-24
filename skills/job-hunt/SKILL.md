@@ -35,6 +35,9 @@ For each row in the Sites table:
 6. Collect kept postings and send them with `add_jobs` in batches of up to 25. Duplicates come back as
    `duplicate` and are fine.
 
+Jobs at companies on the manual-apply list are still saved like any other: the user wants them found and
+tailored, and applies to them personally. Don't exclude them.
+
 If a site shows a CAPTCHA, a login wall the user hasn't set up, or blocks the page, skip that site for this run
 and report it. Never try to get past it.
 
