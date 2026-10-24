@@ -15,6 +15,11 @@ public sealed class PipelineOptions
 
     /// <summary>Which tailor runs: "TechStack" (v1: fills tech-stack lines, saves PDF) or "CopyMaster" (copies the master resume).</summary>
     public string Tailor { get; set; } = "CopyMaster";
+    /// <summary>
+    /// File name (no extension) for each tailored resume; {job} becomes company-title. Employers see this name.
+    /// Example: "Jane_Doe_Resume(tailored for {job})" or just "Jane_Doe_Resume".
+    /// </summary>
+    public string ResumeFileName { get; set; } = ResumeFiles.DefaultFileName;
     /// <summary>Your resume as a Word .docx with {{ADD_MISSING}} at the end of each tech-stack line (TechStack tailor).</summary>
     public string ResumeTemplatePath { get; set; } = "";
     /// <summary>"Word" (Microsoft Word, needs a logged-in session) or "LibreOffice" (headless, works on servers).</summary>
@@ -46,8 +51,8 @@ public interface ITailor
 }
 
 /// <summary>
-/// Stand-in so the whole pipeline runs end to end today: copies the master resume under a per-job name and
-/// writes the posting's tech stack (exactly as captured) next to it for reference.
+/// Stand-in so the whole pipeline runs end to end: copies the master resume into the job's folder and writes the
+/// posting's tech stack (exactly as captured) next to it for reference.
 /// </summary>
 public sealed class CopyMasterResumeTailor(PipelineOptions options) : ITailor
 {
@@ -58,13 +63,10 @@ public sealed class CopyMasterResumeTailor(PipelineOptions options) : ITailor
             throw new FileNotFoundException($"Master resume not found: '{master}'. Set Pipeline:MasterResumePath in appsettings.json.");
 
         var job = request.Job;
-        var name = ResumeFiles.BaseName(job);
-        var resume = Path.Combine(request.OutputDir, name + Path.GetExtension(master));
+        var dir = ResumeFiles.JobFolder(request.OutputDir, job);
+        var resume = Path.Combine(dir, ResumeFiles.FileName(options.ResumeFileName, job) + Path.GetExtension(master));
         File.Copy(master, resume, overwrite: true);
-
-        if (job.TechStack.Count > 0)
-            await File.WriteAllTextAsync(Path.Combine(request.OutputDir, name + ".keywords.txt"),
-                string.Join(", ", job.TechStack), ct);
+        await File.WriteAllTextAsync(Path.Combine(dir, ResumeFiles.TechStackFile), string.Join(", ", job.TechStack), ct);
 
         return new TailorResult(resume, "placeholder: master resume copied, not tailored");
     }

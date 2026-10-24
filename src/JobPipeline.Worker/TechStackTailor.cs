@@ -1,5 +1,3 @@
-using System.Text;
-
 namespace JobPipeline.Worker;
 
 /// <summary>
@@ -24,9 +22,10 @@ public sealed class TechStackTailor(PipelineOptions options, IPdfConverter conve
                 $"Resume template not found: '{template}'. Set Pipeline:ResumeTemplatePath to your resume .docx.");
 
         var job = request.Job;
-        var name = ResumeFiles.BaseName(job);
-        var docx = Path.Combine(request.OutputDir, name + ".docx");
-        var pdf = Path.Combine(request.OutputDir, name + ".pdf");
+        var dir = ResumeFiles.JobFolder(request.OutputDir, job);
+        var fileName = ResumeFiles.FileName(options.ResumeFileName, job);
+        var docx = Path.Combine(dir, fileName + ".docx");
+        var pdf = Path.Combine(dir, fileName + ".pdf");
         var style = options.HighlightAddedTerms
             ? new AddedStyle(Bold: true, ColorHex: options.HighlightColor, FontSizePt: options.HighlightFontSize > 0 ? options.HighlightFontSize : null)
             : null;
@@ -47,11 +46,8 @@ public sealed class TechStackTailor(PipelineOptions options, IPdfConverter conve
             if (!options.KeepDocx) File.Delete(docx);
         }
 
-        // Next to the PDF: exactly what was added from the posting, so test output is easy to review.
-        var report = new StringBuilder($"{job.Company} – {job.Title}\nPosting tech stack: {string.Join(", ", job.TechStack)}\n");
-        for (var i = 0; i < lines.Count; i++)
-            report.Append($"Line {i + 1}: added {(lines[i].Added.Count == 0 ? "nothing" : string.Join(", ", lines[i].Added))}\n");
-        await File.WriteAllTextAsync(Path.Combine(request.OutputDir, name + ".tech-added.txt"), report.ToString(), ct);
+        // Next to the PDF: the job's tech stack as captured by the hunt, one comma-separated line.
+        await File.WriteAllTextAsync(Path.Combine(dir, ResumeFiles.TechStackFile), string.Join(", ", job.TechStack), ct);
 
         var total = lines.SelectMany(l => l.Added).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         return new TailorResult(pdf, $"tailor v1: {lines.Count} tech-stack line(s), {total} term(s) added from the posting");
@@ -76,9 +72,31 @@ public sealed class TechStackTailor(PipelineOptions options, IPdfConverter conve
 
 public static class ResumeFiles
 {
-    /// <summary>File name (no extension) for a job's resume: company-title-idprefix.</summary>
-    public static string BaseName(JobPipeline.Core.Job job) =>
-        $"{Slug(job.Company)}-{Slug(job.Title)}-{job.Id.ToString()[..8]}";
+    public const string TechStackFile = "techstack.txt";
+    public const string DefaultFileName = "Resume(tailored for {job})";
+
+    /// <summary>Folder name for a job's files: company-title-idprefix (unique per job).</summary>
+    public static string BaseName(JobPipeline.Core.Job job) => $"{JobSlug(job)}-{job.Id.ToString()[..8]}";
+
+    /// <summary>Creates (if needed) and returns the job's own folder under the resumes folder.</summary>
+    public static string JobFolder(string resumesDir, JobPipeline.Core.Job job) =>
+        Directory.CreateDirectory(Path.Combine(resumesDir, BaseName(job))).FullName;
+
+    /// <summary>
+    /// Resume file name (no extension) from Pipeline:ResumeFileName, e.g. "Jane_Doe_Resume(tailored for {job})";
+    /// {job} becomes company-title. Characters Windows doesn't allow in file names are removed.
+    /// </summary>
+    public static string FileName(string? pattern, JobPipeline.Core.Job job)
+    {
+        var raw = (string.IsNullOrWhiteSpace(pattern) ? DefaultFileName : pattern)
+            .Replace("{job}", JobSlug(job), StringComparison.OrdinalIgnoreCase);
+        var invalid = Path.GetInvalidFileNameChars().Concat(new[] { '<', '>', ':', '"', '/', '\\', '|', '?', '*' }).ToHashSet();
+        var clean = new string(raw.Where(c => !invalid.Contains(c) && !char.IsControl(c)).ToArray()).Trim().TrimEnd('.');
+        return clean.Length == 0 ? "Resume" : clean.Length > 150 ? clean[..150].TrimEnd() : clean;
+    }
+
+    /// <summary>company-title, lowercase with dashes, e.g. "draftkings-senior-platform-engineer".</summary>
+    public static string JobSlug(JobPipeline.Core.Job job) => $"{Slug(job.Company)}-{Slug(job.Title)}";
 
     static string Slug(string s)
     {

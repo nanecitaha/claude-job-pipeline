@@ -162,6 +162,31 @@ public static class Tools
             """,
             a => store.ResolveAction(Id(a), Parse<ResolveOutcome>(Str(a, "outcome")!), Str(a, "note"))),
 
+        new("retailor_jobs",
+            "Send jobs back to the worker for a fresh tailored resume, e.g. after the user changed their resume " +
+            "template or tailor settings. Pass ids, or allReady=true for every ReadyToApply job. Works on ReadyToApply, " +
+            "ActionNeeded and Failed jobs; they return to New and the worker re-tailors them within a minute. " +
+            "Only call when the user asks.",
+            """
+            {"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"allReady":{"type":"boolean"}}}
+            """,
+            a =>
+            {
+                var ids = new List<Guid>();
+                if (a.TryGetProperty("ids", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    foreach (var e in arr.EnumerateArray())
+                        ids.Add(Guid.TryParse(e.GetString(), out var g) ? g : throw new ArgumentException($"'{e}' is not a job id"));
+                if (Bool(a, "allReady") == true)
+                    ids.AddRange(store.ListJobs(JobStatus.ReadyToApply, 500).Select(j => j.Id));
+                if (ids.Count == 0) throw new ArgumentException("Pass ids or allReady=true.");
+                var results = ids.Distinct().Select(id =>
+                {
+                    try { var j = store.RequeueForTailoring(id); return (object)new { j.Id, j.Company, j.Title, Result = "requeued" }; }
+                    catch (PipelineException ex) { return new { Id = id, Company = "", Title = "", Result = ex.Message }; }
+                }).ToList();
+                return new { results, stats = store.Stats() };
+            }),
+
         new("record_email",
             "Attach a Gmail message to a job (use find_jobs first). confirmation → Applied, rejection → Rejected, " +
             "interview → Interviewing (pass interviewDate only when a specific time is confirmed). The same thread and " +

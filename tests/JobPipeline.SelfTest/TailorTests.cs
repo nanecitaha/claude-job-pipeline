@@ -87,19 +87,31 @@ public static class TailorTests
             return Task.CompletedTask;
         });
 
-        Test("tailor: end to end with a fake converter writes the PDF and a report of what was added", async () =>
+        Test("tailor: end to end: one folder per job, named resume, techstack.txt", async () =>
         {
             var (dir, opts, job) = Setup();
+            opts.ResumeFileName = "Jane_Doe_Resume(tailored for {job})";
             var tailor = new TechStackTailor(opts, new CopyConverter());
             var result = await tailor.TailorAsync(new TailorRequest(job, "jd", dir), CancellationToken.None);
-            Eq(true, File.Exists(result.ResumePath) && result.ResumePath.EndsWith(".pdf"), "pdf written");
-            Eq(false, File.Exists(Path.ChangeExtension(result.ResumePath, ".docx")), "temp docx removed");
+            var folder = Path.Combine(dir, ResumeFiles.BaseName(job));
+            Eq(Path.Combine(folder, "Jane_Doe_Resume(tailored for acme-inc-senior-backend-engineer).pdf"), result.ResumePath);
+            Eq(true, File.Exists(result.ResumePath), "pdf written");
+            Eq("acme-inc-senior-backend-engineer-" + job.Id.ToString()[..8], ResumeFiles.BaseName(job), "folder = slug + id prefix");
+            Eq("C#, Azure, sql server, Kubernetes", File.ReadAllText(Path.Combine(folder, "techstack.txt")));
+            Eq(2, Directory.GetFiles(folder).Length, "only the pdf and techstack.txt (temp docx removed)");
             var text = DocxTemplate.ReadText(result.ResumePath);   // fake converter copies the docx
             Contains(text, "C#, .NET 8, SQL Server, Azure, Kubernetes");
             Contains(text, "C#, ASP.NET MVC, SQL Server, Azure, Kubernetes");
-            var report = File.ReadAllText(Path.Combine(dir, ResumeFiles.BaseName(job) + ".tech-added.txt"));
-            Contains(report, "Line 1: added Azure, Kubernetes");
             Contains(result.Note ?? "", "2 tech-stack line(s), 2 term(s)");
+        });
+
+        Test("tailor: file name pattern defaults, drops characters Windows forbids", () =>
+        {
+            var job = new Job { Id = Guid.NewGuid(), Company = "Acme Inc.", Title = "Senior Backend Engineer" };
+            Eq("Resume(tailored for acme-inc-senior-backend-engineer)", ResumeFiles.FileName(null, job));
+            Eq("Jane_Doe_Resume", ResumeFiles.FileName("Jane_Doe_Resume", job));
+            Eq("AB for acme-inc-senior-backend-engineer", ResumeFiles.FileName("A<B> for {JOB}:?", job));
+            return Task.CompletedTask;
         });
 
         Test("tailor: a template without {{ADD_MISSING}} fails clearly and leaves nothing behind", async () =>
@@ -108,7 +120,7 @@ public static class TailorTests
             WriteDocx(opts.ResumeTemplatePath, Para(Run("No tags here")));
             var t = new TechStackTailor(opts, new CopyConverter());
             await Throws<InvalidOperationException>(() => t.TailorAsync(new TailorRequest(job, "jd", dir), default), "No {{ADD_MISSING}}");
-            Eq(0, Directory.GetFiles(dir, "*.pdf").Length, "no pdf left behind");
+            Eq(0, Directory.GetFiles(dir, "*.pdf", SearchOption.AllDirectories).Length, "no pdf left behind");
         });
 
         Test("tailor: missing template is reported with the setting to fix", async () =>

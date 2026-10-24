@@ -290,6 +290,20 @@ Test("manual-apply: listed companies are handed to the user, never started", () 
     Eq(JobStatus.Applied, s.ResolveAction(google, ResolveOutcome.Applied, "applied myself").Status);
 });
 
+Test("re-tailor: ReadyToApply / ActionNeeded / Failed go back to New with the resume cleared", () =>
+{
+    var s = new JobStore(NewDir());
+    var id = ReadyJob(s);
+    var j = s.RequeueForTailoring(id);
+    Eq(JobStatus.New, j.Status);
+    Eq<string?>(null, j.ResumePath);
+    Eq(0, j.TailorAttempts);
+    Eq(id, s.ClaimForTailoring(TimeSpan.FromMinutes(30))!.Id);
+    s.CompleteTailoring(id, "/tmp/new.pdf");
+    s.StartApply(id); s.MarkApplied(id);
+    Throws<PipelineException>(() => s.RequeueForTailoring(id), "needs ReadyToApply or ActionNeeded or Failed");
+});
+
 var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;

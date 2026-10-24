@@ -241,6 +241,22 @@ public sealed class JobStore
         return (Clone(job), true);
     });
 
+    /// <summary>
+    /// Sends a job back to the worker for a fresh resume (e.g. after changing the template or tailor settings):
+    /// ReadyToApply, ActionNeeded or Failed → New. The old resume path is dropped; the old file is left on disk.
+    /// </summary>
+    public Job RequeueForTailoring(Guid id, string by = "you") => Mutate(db =>
+    {
+        var job = Get(db, id);
+        Expect(job, JobStatus.ReadyToApply, JobStatus.ActionNeeded, JobStatus.Failed);
+        job.ResumePath = null;
+        job.ActionDesc = null;
+        job.LastError = null;
+        job.TailorAttempts = 0;
+        Move(job, JobStatus.New, by, "re-tailor requested");
+        return (Clone(job), true);
+    });
+
     /// <summary>You clearing a blocker: retry it, record that you applied by hand, or drop it.</summary>
     public Job ResolveAction(Guid id, ResolveOutcome outcome, string? note, string by = "you") => Mutate(db =>
     {

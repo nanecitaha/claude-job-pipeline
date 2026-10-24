@@ -10,6 +10,10 @@ var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     ContentRootPath = AppContext.BaseDirectory,
 });
 
+// Personal overrides (your name in ResumeFileName, other paths) go in appsettings.Local.json next to the exe.
+// It isn't part of the repo, and publishing doesn't overwrite it.
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+
 builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pipeline"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<PipelineOptions>>().Value);
 builder.Services.AddSingleton(sp =>
