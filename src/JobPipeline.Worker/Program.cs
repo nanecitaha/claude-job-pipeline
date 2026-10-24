@@ -2,7 +2,13 @@ using JobPipeline.Core;
 using JobPipeline.Worker;
 using Microsoft.Extensions.Options;
 
-var builder = Host.CreateApplicationBuilder(args);
+// Read appsettings.json from the exe's folder, not the current directory: the worker is often started from
+// elsewhere (a console in the user's home folder, Task Scheduler in System32).
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 
 builder.Services.Configure<PipelineOptions>(builder.Configuration.GetSection("Pipeline"));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<PipelineOptions>>().Value);

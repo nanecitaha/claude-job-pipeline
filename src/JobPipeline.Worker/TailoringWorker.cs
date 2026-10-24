@@ -14,7 +14,8 @@ public sealed class TailoringWorker(JobStore store, ITailor tailor, IOptions<Pip
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        log.LogInformation("Tailoring worker started. Data folder: {Dir}", store.DataDir);
+        log.LogInformation("Tailoring worker started. Data folder: {Dir}. Tailor: {Tailor}{Converter}.",
+            store.DataDir, tailor.GetType().Name, tailor is TechStackTailor ? $" (PDF via {_o.PdfConverter})" : "");
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Math.Max(5, _o.PollSeconds)));
         do
         {
