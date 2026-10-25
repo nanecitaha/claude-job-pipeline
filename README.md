@@ -68,6 +68,7 @@ because it may already have been submitted.
    python tests\e2e\mcp_e2e.py                                # MCP + worker end to end
    dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
    dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
+   dotnet publish src\JobPipeline.Dashboard -c Release -o C:\JobPipeline\bin\dashboard
    ```
 3. **Resume**: set up the tailor (see [Tailoring](#tailoring)); for `CopyMaster`, save it as `C:\JobPipeline\master-resume.pdf` (or change the path in
    `C:\JobPipeline\bin\worker\appsettings.json`, which also sets the data folder `C:\JobPipeline\data`).
@@ -101,6 +102,11 @@ because it may already have been submitted.
 7. **Skills**: save `skills/job-hunt`, `skills/job-apply`, `skills/job-email-sync` in Claude.
 8. **Schedule** in Claude desktop on the VPS (keep the VM from sleeping and the app open):
    hunt 7:00, apply 9:00, email sync 18:00, weekdays. Run apply by hand the first week and watch it.
+
+**Dashboard**: run `C:\JobPipeline\bin\dashboard\JobPipeline.Dashboard.exe` and open http://localhost:5080 to
+browse every job, filter by status, search, change statuses, comment, edit fields, add jobs you found yourself
+and delete jobs. It writes through the same `JobStore`, so it's safe alongside the worker and Claude. Port and data
+folder: `appsettings.Local.json` next to the exe (`Urls`, `Dashboard:DataDir`).
 
 Checking on things from chat: "what's blocked on me?" (`list_jobs` ActionNeeded), "I applied to Acme myself"
 (`resolve_action` applied), "retry the Globex one" (`resolve_action` retry), "pipeline stats".
@@ -187,14 +193,15 @@ Add your class and a case for it in the `Pipeline:Tailor` switch in `src/JobPipe
 src/JobPipeline.Core     JobStore (lock, atomic writes, state machine), models, dedupe
 src/JobPipeline.Mcp      stdio MCP server: 13 tools + config files
 src/JobPipeline.Worker   tailoring BackgroundService, ITailor, tech-stack tailor (v1), Word/LibreOffice PDF
+src/JobPipeline.Dashboard  local web app (http://localhost:5080): view, edit, comment, add, delete jobs
 tests/JobPipeline.SelfTest   dependency-free tests: transitions, crash recovery, dedupe, concurrency
-tests/e2e                    MCP stdio + worker processes end to end (CI runs both on Windows and Linux)
+tests/e2e                    MCP stdio + worker, and dashboard API, end to end (CI runs them on Windows and Linux)
 skills/                  job-hunt, job-apply, job-email-sync
 ```
 
 Data folder: `jobs.db` (+ its `-wal`/`-shm` files), `resumes/`, `hunt-config.md`, `applicant-profile.md`, `resume.md`.
-Browse it with any SQLite tool (DB Browser for SQLite, `sqlite3`); for edits, stop the worker and Claude first or
-go through the MCP tools. Back it up with `sqlite3 jobs.db ".backup jobs-backup.db"` (safe while running).
+Browse it with any SQLite tool (DB Browser for SQLite, `sqlite3`); for edits, use the dashboard or the MCP tools
+(or stop the worker and Claude first). Back it up with `sqlite3 jobs.db ".backup jobs-backup.db"` (safe while running).
 Upgrading from the earlier `jobs.json` store: the first start imports it and renames it `jobs.json.imported`.
 
 ## Contributing
