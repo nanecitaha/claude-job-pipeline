@@ -193,13 +193,19 @@ Different folder, or `CopyMasterResumeTailor`? See Part 5.
 
 ### 4.2 See and edit your jobs (dashboard)
 
-Open a second PowerShell window and run:
+The dashboard needs a sign-in. Create your user once (it asks for the password twice; at least 10 characters):
+
+```powershell
+C:\JobPipeline\bin\dashboard\JobPipeline.Dashboard.exe user add taha
+```
+
+Then start it in a second PowerShell window:
 
 ```powershell
 C:\JobPipeline\bin\dashboard\JobPipeline.Dashboard.exe
 ```
 
-Then open **http://localhost:5080** in your browser. Leave the window open while you use it (Ctrl+C stops it).
+Open **http://localhost:5080** and sign in. Leave the window open while you use it (Ctrl+C stops it).
 It can run at the same time as the worker and Claude.
 
 - The coloured bar at the top counts jobs per status; click one to show only those jobs, click again for all.
@@ -209,6 +215,20 @@ It can run at the same time as the worker and Claude.
 - **Add a job** puts in one you found yourself. Leave it as New and the worker tailors a resume for it.
 - Setting a job back to **New** makes the worker tailor a fresh resume. Tailoring and Applying can't be set
   by hand: the worker and Claude set those.
+
+Users (run these with the dashboard running or not):
+
+| To | Run |
+|---|---|
+| Add someone | `JobPipeline.Dashboard.exe user add <name>` |
+| Change a password | `JobPipeline.Dashboard.exe user passwd <name>` (signs them out everywhere) |
+| Remove someone | `JobPipeline.Dashboard.exe user remove <name>` (signs them out right away) |
+| See who has access | `JobPipeline.Dashboard.exe user list` |
+
+Users are stored in the `users` table of `jobs.db`. Passwords are never stored, only a salted, slow hash
+(PBKDF2-SHA256, 600,000 rounds). Every user can see and change every job; there are no roles yet.
+
+To open it from other devices, see 6.5.
 
 Different data folder or port? Create `C:\JobPipeline\bin\dashboard\appsettings.Local.json`:
 
@@ -358,3 +378,43 @@ Put any of these in `C:\JobPipeline\bin\worker\appsettings.Local.json`, then res
 - Automating LinkedIn can get accounts restricted, so it's off by default.
 - Your files (`applicant-profile.md`, `resume.md`, `appsettings.Local.json`) stay on your PC and are never part
   of the repo.
+
+### 6.5 Host the dashboard (open it from your phone or laptop)
+
+**Never open port 5080 to the internet as plain `http://`.** Passwords and your job data would travel
+unencrypted. Keep the dashboard on `http://localhost:5080` and put one of these in front of it:
+
+**Option A: Tailscale (simplest, private).** Only your own devices can reach it; nothing is public.
+1. Install Tailscale on the VPS and on your phone/laptop, signed in to the same account.
+2. On the VPS: `tailscale serve --bg 5080`
+3. Open the `https://<vps-name>.<tailnet>.ts.net` address it prints, on any of your devices.
+
+**Option B: your own domain with Caddy (public, automatic HTTPS).**
+1. Point a DNS record (e.g. `jobs.yourdomain.com`, type A) at the VPS's public IP.
+2. Open ports 80 and 443: in your VPS provider's firewall, and in Windows (PowerShell as admin):
+   ```powershell
+   New-NetFirewallRule -DisplayName "Caddy web" -Direction Inbound -Protocol TCP -LocalPort 80,443 -Action Allow
+   ```
+3. Install Caddy (`winget install CaddyServer.Caddy`), then create `C:\JobPipeline\Caddyfile`:
+   ```
+   jobs.yourdomain.com {
+       reverse_proxy localhost:5080
+   }
+   ```
+4. Run `caddy run --config C:\JobPipeline\Caddyfile`. It gets a Let's Encrypt certificate by itself. Open
+   `https://jobs.yourdomain.com` and sign in.
+
+**Option C: Cloudflare Tunnel** (public, no open ports; needs a domain on Cloudflare): run `cloudflared` pointed
+at `http://localhost:5080`.
+
+All three work without changing the dashboard: it reads the visitor's real address and HTTPS from the proxy
+(only proxies on the same machine are trusted), marks the sign-in cookie Secure, and limits sign-in attempts
+to 5 a minute per address.
+
+**Start it with Windows**: Task Scheduler → Create Task → trigger "At startup" → action
+`C:\JobPipeline\bin\dashboard\JobPipeline.Dashboard.exe`, "Run whether user is logged on or not". Do the same
+for `caddy run --config C:\JobPipeline\Caddyfile` if you use Option B.
+
+Sign-in settings (in `appsettings.Local.json`, under `"Dashboard"`): `SessionHours` (default 12: how long a
+sign-in lasts without "Keep me signed in"), `LoginAttemptsPerMinute` (default 5).
+
