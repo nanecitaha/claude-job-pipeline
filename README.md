@@ -103,10 +103,12 @@ because it may already have been submitted.
 8. **Schedule** in Claude desktop on the VPS (keep the VM from sleeping and the app open):
    hunt 7:00, apply 9:00, email sync 18:00, weekdays. Run apply by hand the first week and watch it.
 
-**Dashboard**: run `C:\JobPipeline\bin\dashboard\JobPipeline.Dashboard.exe` and open http://localhost:5080 to
+**Dashboard**: create a user (`JobPipeline.Dashboard.exe user add <name>`), run
+`C:\JobPipeline\bin\dashboard\JobPipeline.Dashboard.exe` and open http://localhost:5080 to sign in and
 browse every job, filter by status, search, change statuses, comment, edit fields, add jobs you found yourself
 and delete jobs. It writes through the same `JobStore`, so it's safe alongside the worker and Claude. Port and data
-folder: `appsettings.Local.json` next to the exe (`Urls`, `Dashboard:DataDir`).
+folder: `appsettings.Local.json` next to the exe (`Urls`, `Dashboard:DataDir`). Users live in the `users` table of `jobs.db` (PBKDF2 password hashes); to reach it from other devices, put
+HTTPS in front of it (Tailscale, Caddy or Cloudflare Tunnel: see `docs/GETTING-STARTED.md` 6.5).
 
 Checking on things from chat: "what's blocked on me?" (`list_jobs` ActionNeeded), "I applied to Acme myself"
 (`resolve_action` applied), "retry the Globex one" (`resolve_action` retry), "pipeline stats".

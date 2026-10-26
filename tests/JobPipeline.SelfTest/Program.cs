@@ -414,6 +414,43 @@ Test("dashboard: comments add and delete; job description saved; search; delete 
     Eq(other, new JobStore(dir).QueryJobs(null, null).Single().Id);
 });
 
+Test("users: create, sign in, change password, delete; passwords hashed with a salt", () =>
+{
+    var dir = NewDir();
+    var s = new JobStore(dir);
+    Eq(0, s.UserCount());
+    var u = s.CreateUser("  taha ", "correct horse battery");
+    Eq("taha", u.Username, "trimmed");
+    Throws<PipelineException>(() => s.CreateUser("TAHA", "another long password"), "already exists");
+    Throws<PipelineException>(() => s.CreateUser("bob", "short"), "at least");
+    Throws<PipelineException>(() => s.CreateUser("a b", "long enough password"), "Usernames");
+
+    Eq<UserInfo?>(null, s.VerifyLogin("taha", "wrong password!!"), "wrong password");
+    Eq<UserInfo?>(null, s.VerifyLogin("nobody", "correct horse battery"), "unknown user");
+    var signedIn = s.VerifyLogin("Taha", "correct horse battery");
+    Eq(u.Id, signedIn?.Id, "username is case-insensitive");
+    Eq(true, signedIn?.LastLoginAt is not null, "last sign-in recorded");
+
+    var changed = s.SetPassword("taha", "a brand new password");
+    Eq(true, changed.PasswordChangedAt >= u.PasswordChangedAt, "password-changed time moves (signs out old sessions)");
+    Eq<UserInfo?>(null, s.VerifyLogin("taha", "correct horse battery"), "old password no longer works");
+    Eq(u.Id, s.VerifyLogin("taha", "a brand new password")?.Id);
+
+    s.CreateUser("other", "correct horse battery");
+    var a = PasswordHashing.Hash("same password here");
+    var b = PasswordHashing.Hash("same password here");
+    Eq(false, a == b, "random salt: same password, different hash");
+    Eq(true, a.StartsWith("pbkdf2-sha256$600000$"), "format");
+    Eq((true, false), PasswordHashing.Verify("same password here", a));
+    Eq((true, true), PasswordHashing.Verify("weak settings!", PasswordHashing.Hash("weak settings!", 1000)), "old hash flagged for upgrade");
+    Eq((false, false), PasswordHashing.Verify("x", "garbage"), "bad stored value");
+
+    Eq(2, new JobStore(dir).ListUsers().Count, "users persist");
+    Eq(true, s.DeleteUser("OTHER"));
+    Eq(false, s.DeleteUser("other"));
+    Eq(1, s.UserCount());
+});
+
 var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;

@@ -28,10 +28,14 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 // ── API ────────────────────────────────────────────────────────────────────────────────────────────────────────
 async function api(path, options = {}) {
   const res = await fetch(`/api${path}`, {
-    headers: options.body ? { "Content-Type": "application/json" } : undefined,
+    headers: { "X-Requested-With": "JobPipeline", ...(options.body ? { "Content-Type": "application/json" } : {}) },
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
+  if (res.status === 401) {   // signed out (expired, password changed, or user removed): back to the sign-in page
+    location.replace(`/login.html?next=${encodeURIComponent(location.pathname + location.search)}`);
+    throw new Error("Please sign in.");
+  }
   if (res.status === 204) return null;
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
@@ -459,7 +463,17 @@ $("addJob").addEventListener("click", () => {
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────────────────────────────────────────
+$("signOut").addEventListener("click", async () => {
+  await api("/logout", { method: "POST" }).catch(() => {});
+  location.replace("/login.html");
+});
+
 (async () => {
+  try {
+    const me = await api("/me");
+    $("whoName").textContent = `Signed in as ${me.username}`;
+    $("who").hidden = false;
+  } catch { return; }
   try {
     const info = await api("/info");
     $("dataDir").textContent = `Reading ${info.database}`;

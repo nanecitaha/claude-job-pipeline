@@ -91,6 +91,7 @@ When you change a tool's name or arguments, update the skill that calls it in `s
 ### Dashboard API (`Dashboard/Program.cs`)
 | Endpoint | What it does |
 |---|---|
+| `POST /api/login` `{username,password,remember}`, `POST /api/logout`, `GET /api/me` | sign-in |
 | `GET /api/info`, `GET /api/stats` | data folder and database path; job counts per status |
 | `GET /api/jobs?status=&q=` | list jobs, optionally filtered by status and search text |
 | `GET /api/jobs/{id}` | one job plus its job description (`{job, jdText}`) |
@@ -101,6 +102,20 @@ When you change a tool's name or arguments, update the skill that calls it in `s
 | `PUT /api/jobs/{id}/description` | replace the job description |
 | `DELETE /api/jobs/{id}` | delete the job |
 | `GET /api/jobs/{id}/resume` | the tailored resume; only files inside the data folder are served |
+
+**Sign-in** (`Program.cs`, `UserCommands.cs`, `Core/Users.cs`): every page and `/api/*` route except
+`/login.html`, `/login.js`, `/app.css` and `POST /api/login` needs a signed-in cookie session.
+- Users live in the `users` table (schema v3), with PBKDF2-SHA256 hashes (`PasswordHashing`). They're managed
+  only from the CLI (`JobPipeline.Dashboard.exe user add|passwd|remove|list`); there's no sign-up page.
+- Each request re-checks the user: the cookie carries the password-changed time, so `passwd` and `remove`
+  end sessions.
+- Non-GET `/api` calls must send `X-Requested-With: JobPipeline` (CSRF guard; `app.js` and `login.js` add it).
+  New endpoints get all of this automatically through the gate middleware and `RequireAuthorization()` on the
+  `/api` group; keep it that way.
+- `POST /api/login` is rate-limited per IP (`Dashboard:LoginAttemptsPerMinute`). Forwarded headers are trusted
+  only from loopback proxies.
+- Data-protection keys are in `<DataDir>/dashboard-keys` (DPAPI-protected on Windows).
+- Edits and comments record the signed-in username as `by`.
 
 Business-rule errors (`PipelineException`, `ArgumentException`) become HTTP 400 `{error}` with a readable
 message. Keep messages in plain language: they're shown to the user as written.
@@ -160,8 +175,8 @@ dotnet run --project src/JobPipeline.Worker                                     
 
 ## Branches (as of this writing)
 
-`main` ← `sqlite-store` (PR #1) ← `implement-tailor-worker` (PR #2) ← `dashboard-app` (PR #3). Each branch is
-stacked on the one before it, and `dashboard-app` has everything. Branch from `dashboard-app` until these are merged.
+`main` ← `sqlite-store` (PR #1) ← `implement-tailor-worker` (PR #2) ← `dashboard-app` (PR #3) ← `dashboard-auth` (PR #4). Each branch is
+stacked on the one before it, and the newest one has everything. Branch from the newest until these are merged.
 
 ## Known gaps / good next work
 
@@ -170,6 +185,7 @@ stacked on the one before it, and `dashboard-app` has everything. Branch from `d
    owner's area, so agree the approach with them first.
 2. **Fit scoring before tailoring**: the hunt filter is deliberately loose ("C# or .NET mentioned anywhere"), so
    let the worker or a skill skip weak matches.
-3. **Dashboard**: pagination beyond 500 rows, bulk status changes, a CSV export.
+3. **Dashboard**: pagination beyond 500 rows, bulk status changes, a CSV export, roles (read-only users), and
+   changing your own password from the page.
 4. **Daily summary** of what was applied, what's blocked on the owner, and upcoming interviews.
 5. Running the worker as a Windows Service (`AddWindowsService` is stubbed in `Worker/Program.cs`).

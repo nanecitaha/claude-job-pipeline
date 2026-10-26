@@ -14,7 +14,7 @@ namespace JobPipeline.Core;
 /// Each row keeps the full job as a JSON document plus indexed columns (status, company, dates, URLs)
 /// for querying. Job descriptions live in their own table.
 /// </summary>
-public sealed class JobStore
+public sealed partial class JobStore
 {
     public static readonly JsonSerializerOptions Json = new()
     {
@@ -640,6 +640,7 @@ public sealed class JobStore
                 INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '2');
                 """);
             MigrateResumeColumns(conn, tx);
+            CreateUsersTable(conn, tx);
             ImportLegacyJson(conn, tx);
             tx.Commit();
         }
