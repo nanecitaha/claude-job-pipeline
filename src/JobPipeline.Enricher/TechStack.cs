@@ -9,7 +9,7 @@ namespace JobPipeline.Enricher;
 ///
 /// The term list is tech-terms.txt in the data folder, created with a starter list on first run and never
 /// overwritten. One term per line. "# " starts a comment line. "=React" matches case-sensitively (so "react quickly"
-/// doesn't count). "re:" starts a regular expression, e.g. re:\.NET\s?\d+(\.\d+)? for ".NET 8".
+/// doesn't count). "re:" starts a regular expression, e.g. re:\.NET\s?\d+ for ".NET 8".
 /// </summary>
 public sealed class TechStack
 {
@@ -102,8 +102,7 @@ public sealed class TechStack
         .NET
         .NET Core
         .NET Framework
-        re:\.NET\s?(Core\s?)?\d+(\.\d+)?
-        re:C#\s?\d+(\.\d+)?
+        re:\.NET\s?(Core\s?)?\d+(\.\d+)?(?!\s*\+|\d|\s*years?)
         ASP.NET
         ASP.NET Core
         ASP.NET MVC

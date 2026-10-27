@@ -33,6 +33,15 @@ public static class EnrichLogicTests
             Eq<AtsRef?>(null, AtsRef.Parse("not a url"));
         });
 
+        Sync("fetcher: only public addresses are fetched (no localhost, private networks or cloud metadata)", () =>
+        {
+            foreach (var ip in new[] { "127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.10", "169.254.169.254", "100.64.0.1",
+                                       "0.0.0.0", "::1", "fe80::1", "fd00::1", "::ffff:127.0.0.1" })
+                Eq(false, HttpFetcher.IsPublic(System.Net.IPAddress.Parse(ip)), ip);
+            foreach (var ip in new[] { "8.8.8.8", "104.18.0.1", "172.32.0.1", "2606:4700::1" })
+                Eq(true, HttpFetcher.IsPublic(System.Net.IPAddress.Parse(ip)), ip);
+        });
+
         Sync("html: text keeps structure, drops scripts, decodes entity-encoded HTML", () =>
         {
             var text = Html.ToText("<div><h2>About</h2><p>We use C# &amp; .NET.</p><script>var x = 1;</script>" +
@@ -73,6 +82,9 @@ public static class EnrichLogicTests
             Eq(4, Terms.Find("Sr. Jr. Dev", "jr"));
             Eq(-1, Terms.Find("C++ and C#", "C"));
             Eq(-1, Terms.Find("react quickly", "React", caseSensitive: true));
+            Eq(-1, Terms.Find("Email jobs@acme.net or visit careers.acme.net/apply", ".NET"), "a domain isn't .NET");
+            Eq(4, Terms.Find("Use .Net 8", ".NET"));
+            Eq(3, Terms.Find("asp.Net core", ".NET"));
         });
 
         Sync("rules: Filters section parsed; C# isn't a comment; empty line turns a rule off; no section = defaults", () =>
@@ -117,6 +129,7 @@ public static class EnrichLogicTests
                                   "React and the rest of the stack. You will react quickly. Also .NET elsewhere and C#.NET.");
             Eq("ASP.NET Core, .NET 8, Azure, sql server, React, .NET, C#.NET", string.Join(", ", found));
             Eq(0, t.Extract("").Count);
+            Eq("C#, .NET", string.Join(", ", t.Extract("C# 5+ years, .NET 6+ years")), "years and '+' aren't versions");
             var small = TechStack.Parse(["# comment", "re:[", "Kafka"]);
             Eq(1, small.Count, "a broken pattern is skipped, not fatal");
             Eq("kafka", string.Join(", ", small.Extract("kafka? Kafka!")), "first appearance's spelling, listed once");
@@ -171,6 +184,7 @@ public static class EnrichLogicTests
                 .Status("https://builtin.com/job/busy/4", 503)
                 .Page("https://example.com/blocked", "<html><title>Just a moment...</title></html>", headers: new() { ["cf-mitigated"] = "challenge" })
                 .Page("https://example.com/nothing", "<html><body><h1>Job</h1><p>Short.</p></body></html>")
+                .Page("https://example.com/closed", "<html><body><h1>Job</h1><p>Sorry, this job is no longer available.</p></body></html>")
                 .Page("https://example.com/many", "<a href=\"https://jobs.lever.co/a/10dfc8bc-99ad-4ca2-ab76-853cb90a92c2\">Job A</a>" +
                                                   "<a href=\"https://jobs.lever.co/a/20dfc8bc-99ad-4ca2-ab76-853cb90a92c2\">Job B</a>");
             var reader = Reader(f);
@@ -178,6 +192,7 @@ public static class EnrichLogicTests
             await Fails(reader, "https://builtin.com/job/busy/4", EnrichFailure.Transient);
             await Fails(reader, "https://example.com/blocked", EnrichFailure.Permanent, "bot check");
             await Fails(reader, "https://example.com/nothing", EnrichFailure.Permanent, "no structured job data");
+            await Fails(reader, "https://example.com/closed", EnrichFailure.Gone, "no longer available");
             await Fails(reader, "https://example.com/many", EnrichFailure.Permanent, "no structured job data");
             Eq(false, f.Requested.Any(u => u.Contains("api.lever.co")), "a page listing several ATS jobs isn't treated as one job");
             await Fails(reader, "https://www.linkedin.com/jobs/view/123", EnrichFailure.Permanent, "isn't read automatically");
@@ -235,6 +250,29 @@ public static class EnrichLogicTests
             await Fails(reader, "https://travelers.wd5.myworkdayjobs.com/External/job/CT---Hartford/Closed_R-1", EnrichFailure.Gone);
         });
 
+        Test("reader: an ATS API 404 means gone only if the posting page agrees; redirects onto ATS postings are followed", async () =>
+        {
+            const string eu = "https://job-boards.eu.greenhouse.io/acme/jobs/555";
+            const string closed = "https://job-boards.greenhouse.io/acme/jobs/556";
+            const string removed = "https://job-boards.greenhouse.io/acme/jobs/557";
+            const string lever = "https://jobs.lever.co/acme/10dfc8bc-99ad-4ca2-ab76-853cb90a92c2";
+            var f = new FakeFetcher()
+                .Page(eu, "<html><body><h1>Senior Dev</h1><p>Live page, but the API doesn't know this board.</p></body></html>")
+                .Redirect(closed, "https://job-boards.greenhouse.io/acme?error=true")
+                .Status(removed, 404)
+                .Page("https://builtin.com/job/x/9", Builtin("Senior Dev", "Acme", "<a href=\"https://click.example.com/t?id=1\">Apply</a>"))
+                .Redirect("https://click.example.com/t?id=1", lever)
+                .Json("https://api.lever.co/v0/postings/acme/10dfc8bc-99ad-4ca2-ab76-853cb90a92c2",
+                    $$$"""{"text":"Senior Dev","descriptionPlain":"{{{Long("C# work")}}}"}""");
+            var reader = Reader(f);
+            await Fails(reader, eu, EnrichFailure.Permanent, "no structured job data");
+            await Fails(reader, closed, EnrichFailure.Gone);
+            await Fails(reader, removed, EnrichFailure.Gone);
+            var r = await reader.ReadAsync("https://builtin.com/job/x/9", default);
+            Eq(("Acme", lever), (r.Job.Company, r.Job.ApplyUrl));
+            Eq("lever API via redirect from click.example.com via builtin.com", r.How);
+        });
+
         return (passed, failed);
     }
 
@@ -285,6 +323,13 @@ public sealed class FakeFetcher : IFetcher
     public FakeFetcher Page(string url, string html, int status = 200, Dictionary<string, string>? headers = null)
     {
         _pages[url] = new FetchResult(status, html, url, "text/html", null, headers ?? new());
+        return this;
+    }
+
+    /// <summary>A URL that redirects: the response comes from <paramref name="finalUrl"/>.</summary>
+    public FakeFetcher Redirect(string url, string finalUrl, string html = "<html></html>")
+    {
+        _pages[url] = new FetchResult(200, html, finalUrl, "text/html", null, new Dictionary<string, string>());
         return this;
     }
 

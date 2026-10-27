@@ -31,31 +31,31 @@ public sealed class PostingReader(IFetcher fetcher, EnrichOptions options)
             throw new EnrichException(EnrichFailure.Permanent,
                 $"{uri.Host} isn't read automatically (it blocks automated reads or needs a sign-in); fill this job in with add_jobs or on the dashboard");
 
-        if (AtsRef.Parse(url) is { } direct)
-            return new ReadPosting(Checked(await _ats.ReadAsync(direct, companyHint, ct), url), $"{direct.Kind} API");
+        // 1. The URL is an ATS posting.
+        var direct = AtsRef.Parse(url);
+        if (direct is not null)
+        {
+            if (await TryAtsAsync(direct, url, companyHint, null, ct) is { } read) return read;
+        }
 
         var page = await fetcher.GetAsync(url, ct);
         ThrowIfUnreadable(page, uri.Host);
         var html = page.Body;
+
+        // A link that redirected onto an ATS posting (tracking links often do): read that ATS.
+        if (direct is null && AtsRef.Parse(page.FinalUrl) is { } landed)
+        {
+            if (await TryAtsAsync(landed, page.FinalUrl, companyHint, null, ct) is { } read)
+                return read with { How = $"{read.How} via redirect from {uri.Host}" };
+        }
         var hint = companyHint ?? CompanyFromTitle(Html.Title(html));
         var heading = Html.FirstHeading(html);
         var links = Html.Links(html, page.FinalUrl).ToList();
 
         // 2. Apply link to an ATS posting.
-        if (PickAtsLink(links, page.FinalUrl) is { } ats)
-        {
-            try
-            {
-                var job = await _ats.ReadAsync(ats.Ref, hint, ct);
-                job.ApplyUrl ??= ats.Url;
-                if (string.IsNullOrWhiteSpace(job.Title)) job.Title = heading ?? "";
-                return new ReadPosting(Checked(job, ats.Url), $"{ats.Ref.Kind} API via {uri.Host}");
-            }
-            catch (EnrichException ex) when (ex.Kind == EnrichFailure.Permanent)
-            {
-                // The ATS link didn't work out; the page itself may still carry the posting.
-            }
-        }
+        if (PickAtsLink(links, page.FinalUrl) is { } ats
+            && await TryAtsAsync(ats.Ref, ats.Url, hint, heading, ct) is { } viaLink)
+            return viaLink with { How = $"{viaLink.How} via {uri.Host}" };
 
         // 3. schema.org JobPosting on the page.
         if (FromJsonLd(html, hint) is { } ld)
@@ -80,8 +80,62 @@ public sealed class PostingReader(IFetcher fetcher, EnrichOptions options)
             }
         }
 
+        if (ClosedNotice(html) is { } notice)
+            throw new EnrichException(EnrichFailure.Gone, $"the posting is closed ({uri.Host} says \"{notice}\")");
         throw new EnrichException(EnrichFailure.Permanent,
             $"no structured job data on {uri.Host} (no ATS link, no JobPosting data); fill this job in with add_jobs or on the dashboard");
+    }
+
+    /// <summary>Wording job sites use on a posting that has closed but still answers 200.</summary>
+    static readonly string[] ClosedPhrases =
+    [
+        "no longer accepting applications", "this job is no longer available", "this job has expired",
+        "this position has been filled", "job you are looking for is no longer", "this posting has closed",
+        "position is no longer available", "job is closed",
+    ];
+
+    static string? ClosedNotice(string html)
+    {
+        var text = Html.ToText(html);
+        return ClosedPhrases.FirstOrDefault(p => text.Contains(p, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Reads an ATS posting. Returns null when the API couldn't help but the page might (unknown board, odd
+    /// response): the caller carries on with the page. Throws Gone only when the posting is really gone, and
+    /// Transient errors as they are.
+    /// </summary>
+    async Task<ReadPosting?> TryAtsAsync(AtsRef ats, string postingUrl, string? hint, string? heading, CancellationToken ct)
+    {
+        try
+        {
+            var job = await _ats.ReadAsync(ats, hint, ct);
+            job.ApplyUrl ??= postingUrl;
+            if (string.IsNullOrWhiteSpace(job.Title)) job.Title = heading ?? "";
+            return new ReadPosting(Checked(job, postingUrl), $"{ats.Kind} API");
+        }
+        catch (EnrichException ex) when (ex.Kind == EnrichFailure.Permanent)
+        {
+            return null;
+        }
+        catch (EnrichException ex) when (ex.ApiNotFound)
+        {
+            if (await PostingPageGoneAsync(postingUrl, ats, ct)) throw;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// After an ATS API 404: is the posting page gone too (404/410), or does it now send visitors back to the
+    /// board, which is how closed postings behave? A live posting page means the API just didn't know the board.
+    /// </summary>
+    async Task<bool> PostingPageGoneAsync(string postingUrl, AtsRef ats, CancellationToken ct)
+    {
+        var page = await fetcher.GetAsync(postingUrl, ct);
+        if (page.Status is 404 or 410) return true;
+        if (!page.Ok) return false;
+        var landed = AtsRef.Parse(page.FinalUrl);
+        return landed is null || landed.PostingId != ats.PostingId;
     }
 
     bool IsSkippedHost(string host) =>

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 
 namespace JobPipeline.Enricher;
 
@@ -19,6 +20,10 @@ public interface IFetcher
 /// <summary>
 /// HttpClient with a normal browser's headers, cookies, and a minimum gap between requests to the same host.
 /// Nothing here works around a block: a challenge or 403 is reported as such and the posting is left to a person.
+///
+/// URLs come from web pages, so they're untrusted: every connection, including each redirect, is checked at the
+/// socket and refused when the address is on this machine or a private network (localhost, 10.x, 192.168.x,
+/// 169.254.x cloud metadata, …). A posting page can't make the enricher call the dashboard or the VPS's own services.
 /// </summary>
 public sealed class HttpFetcher : IFetcher, IDisposable
 {
@@ -36,6 +41,7 @@ public sealed class HttpFetcher : IFetcher, IDisposable
             AllowAutoRedirect = true,
             MaxAutomaticRedirections = 5,
             PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            ConnectCallback = ConnectPublicOnlyAsync,
         };
         _http = new HttpClient(handler)
         {
@@ -70,6 +76,52 @@ public sealed class HttpFetcher : IFetcher, IDisposable
             return new FetchResult(0, "", url, null, ex is TaskCanceledException ? "timed out" : ex.Message,
                 new Dictionary<string, string>());
         }
+    }
+
+    static async ValueTask<Stream> ConnectPublicOnlyAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+    {
+        var host = context.DnsEndPoint.Host;
+        var addresses = IPAddress.TryParse(host, out var literal) ? [literal] : await Dns.GetHostAddressesAsync(host, ct);
+        var allowed = addresses.Where(IsPublic).ToList();
+        if (allowed.Count == 0)
+            throw new HttpRequestException($"{host} resolves to a local or private address; not fetched");
+
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            await socket.ConnectAsync(allowed.ToArray(), context.DnsEndPoint.Port, ct);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>False for loopback, private, link-local, carrier-grade NAT, multicast and unspecified addresses.</summary>
+    public static bool IsPublic(IPAddress ip)
+    {
+        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+        if (IPAddress.IsLoopback(ip) || ip.Equals(IPAddress.Any) || ip.Equals(IPAddress.IPv6Any) || ip.Equals(IPAddress.IPv6None))
+            return false;
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            return !(b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224
+                     || (b[0] == 100 && b[1] >= 64 && b[1] <= 127)      // carrier-grade NAT
+                     || (b[0] == 169 && b[1] == 254)                     // link-local, cloud metadata
+                     || (b[0] == 172 && b[1] >= 16 && b[1] <= 31)
+                     || (b[0] == 192 && b[1] == 168)
+                     || (b[0] == 192 && b[1] == 0 && b[2] == 0));
+        }
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var b = ip.GetAddressBytes();
+            return !(ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal || ip.IsIPv6Multicast
+                     || (b[0] & 0xFE) == 0xFC);                         // unique local fc00::/7
+        }
+        return false;
     }
 
     async Task WaitForTurnAsync(string host, CancellationToken ct)

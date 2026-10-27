@@ -134,11 +134,19 @@ public static class Terms
             var leftOk = !char.IsLetterOrDigit(term[0]) || i == 0 || !char.IsLetterOrDigit(text[i - 1]);
             var end = i + term.Length;
             var rightOk = !IsWordEnd(term[^1]) || end >= text.Length || !IsWordChar(text[end]);
-            if (leftOk && rightOk) return i;
+            if (leftOk && rightOk && !LooksLikeDomain(text, i, term.Length)) return i;
             i++;
         }
         return -1;
     }
+
+    /// <summary>
+    /// ".net" in "careers@acme.net" or "acme.net/jobs" is a domain, not .NET: a term starting with a dot, written
+    /// all lowercase right after a lowercase letter or digit. "ASP.NET", ".Net 8" and "asp.Net" still match.
+    /// </summary>
+    static bool LooksLikeDomain(string text, int at, int length) =>
+        text[at] == '.' && at > 0 && (char.IsLower(text[at - 1]) || char.IsDigit(text[at - 1]))
+        && text.Substring(at, length).All(c => !char.IsLetter(c) || char.IsLower(c));
 
     // "C#" ends in '#': no right edge needed. "Node" ends in a letter: "Nodes" mustn't match, "Node.js" may.
     static bool IsWordEnd(char c) => char.IsLetterOrDigit(c);

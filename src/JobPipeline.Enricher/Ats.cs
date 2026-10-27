@@ -250,7 +250,7 @@ public sealed class AtsReader(IFetcher fetcher)
     {
         var res = await fetcher.GetAsync(url, ct);
         if (res.Status is 404 or 410)
-            throw new EnrichException(EnrichFailure.Gone, $"{ats} says the posting doesn't exist (HTTP {res.Status})");
+            throw new EnrichException(EnrichFailure.Gone, $"{ats} says the posting doesn't exist (HTTP {res.Status})") { ApiNotFound = true };
         if (res.Status == 0 || res.Status is 429 or >= 500)
             throw new EnrichException(EnrichFailure.Transient, $"{ats} API: {res.Error ?? $"HTTP {res.Status}"}");
         if (!res.Ok)
@@ -317,4 +317,9 @@ public sealed class AtsReader(IFetcher fetcher)
 public sealed class EnrichException(EnrichFailure kind, string message) : Exception(message)
 {
     public EnrichFailure Kind { get; } = kind;
+    /// <summary>
+    /// The ATS API answered 404/410. Usually the posting is closed, but the API may simply not know the board
+    /// (another region, a custom domain), so the reader checks the posting page before calling it gone.
+    /// </summary>
+    public bool ApiNotFound { get; init; }
 }

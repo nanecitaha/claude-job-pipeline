@@ -585,6 +585,8 @@ public sealed partial class JobStore
             case JobStatus.Discovered:
                 Require(!string.IsNullOrWhiteSpace(job.ListingUrl) || !string.IsNullOrWhiteSpace(job.ApplyUrl),
                     "this job has no URL to read");
+                Require(job.DateApplied is null && job.Status is not (JobStatus.Applied or JobStatus.Interviewing or JobStatus.Rejected),
+                    "this job was already applied to; re-reading it could filter it out and lose that");
                 job.EnrichAttempts = 0;
                 job.LastError = null;
                 job.ActionDesc = null;
