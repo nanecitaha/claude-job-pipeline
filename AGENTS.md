@@ -78,6 +78,7 @@ src/JobPipeline.Worker     TailoringWorker.cs (poll loop), Tailoring.cs (ITailor
                            TechStackTailor.cs (v1), DocxTemplate.cs (docx edits), ResumeLocation.cs, PdfConverters.cs (Word / LibreOffice)
 src/JobPipeline.Dashboard  Program.cs (minimal API), wwwroot/ (index.html, app.css, app.js: no framework, no build step)
 skills/                    job-hunt, job-apply, job-email-sync SKILL.md (Claude desktop skills)
+tools/JobPipeline.Probe    one-off check: can plain HTTP on this machine read job pages / ATS APIs (no deps)
 tests/JobPipeline.SelfTest dependency-free test runner (store, state machine, concurrency, tailor)
 tests/e2e                  mcp_e2e.py (MCP + worker processes), dashboard_e2e.py (dashboard API)
 docs/GETTING-STARTED.md    end-user setup from a fresh Windows PC
@@ -87,6 +88,9 @@ docs/GETTING-STARTED.md    end-user setup from a fresh Windows PC
 `get_config`, `add_jobs`, `find_jobs`, `get_job`, `list_jobs`, `pipeline_stats`, `begin_apply_run`, `start_apply`,
 `mark_applied`, `flag_action`, `close_job`, `resolve_action`, `update_tech_stack`, `retailor_jobs`, `record_email`.
 When you change a tool's name or arguments, update the skill that calls it in `skills/` and `tests/e2e/mcp_e2e.py`.
+Tool results go into Claude's context on every call, so keep them small: `McpServer.Wire` writes compact JSON
+without null fields, state changes return `Tools.Brief`, and `get_job` returns `Tools.Detail` unless asked for
+history. Keep tool descriptions to a line or two; the rules for when and how to call a tool belong in the skills.
 
 ### Dashboard API (`Dashboard/Program.cs`)
 | Endpoint | What it does |

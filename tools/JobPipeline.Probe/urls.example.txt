@@ -1,0 +1,15 @@
+# One URL per line; lines starting with # are skipped. Run on the VPS:
+#   dotnet run --project tools/JobPipeline.Probe -- --file tools/JobPipeline.Probe/urls.example.txt
+# Replace the placeholders with real, current URLs before running.
+
+# A builtin search page (the one from hunt-config.md)
+https://builtin.com/jobs/remote/dev-engineering/senior?search=C%23%20.NET
+
+# A builtin listing page: open the search above in a browser and paste one job's URL here
+# https://builtin.com/job/...
+
+# Employer ATS postings: paste one of each you can find
+# https://job-boards.greenhouse.io/<company>/jobs/<id>
+# https://jobs.lever.co/<company>/<posting-id>
+# https://jobs.ashbyhq.com/<company>/<posting-id>
+# https://<tenant>.wd5.myworkdayjobs.com/<site>/job/<location>/<title>_<req-id>
