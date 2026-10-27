@@ -1,15 +1,22 @@
 "use strict";
 
 // ── Status vocabulary ──────────────────────────────────────────────────────────────────────────────────────────
-const FLOW = ["New", "Tailoring", "ReadyToApply", "Applying", "Applied", "Interviewing"];
-const EXITS = ["ActionNeeded", "Rejected", "Skipped", "Expired", "Failed"];
+const FLOW = ["Discovered", "Enriching", "New", "Tailoring", "ReadyToApply", "Applying", "Applied", "Interviewing"];
+const EXITS = ["NeedsReview", "ActionNeeded", "EnrichFailed", "Excluded", "Rejected", "Skipped", "Expired", "Failed"];
 const LABEL = {
-  New: "New", Tailoring: "Tailoring", ReadyToApply: "Ready to apply", Applying: "Applying", Applied: "Applied",
-  Interviewing: "Interviewing", ActionNeeded: "Needs you", Rejected: "Rejected", Skipped: "Skipped",
-  Expired: "Expired", Failed: "Failed",
+  Discovered: "Found", Enriching: "Reading", New: "New", Tailoring: "Tailoring", ReadyToApply: "Ready to apply",
+  Applying: "Applying", Applied: "Applied", Interviewing: "Interviewing", NeedsReview: "Review", ActionNeeded: "Needs you",
+  EnrichFailed: "Couldn't read", Excluded: "Excluded", Rejected: "Rejected", Skipped: "Skipped", Expired: "Expired",
+  Failed: "Failed",
 };
-// Statuses you can set by hand (Tailoring and Applying belong to the pipeline).
-const SETTABLE = ["New", "ReadyToApply", "Applied", "Interviewing", "ActionNeeded", "Rejected", "Skipped", "Expired", "Failed"];
+// Statuses you can set by hand (Enriching, Tailoring and Applying belong to the pipeline). Discovered = read it again.
+const SETTABLE = ["Discovered", "New", "ReadyToApply", "Applied", "Interviewing", "NeedsReview", "ActionNeeded",
+  "Excluded", "Rejected", "Skipped", "Expired", "Failed"];
+// Statuses whose actionDesc says why (what it needs from you, or why it was filtered out).
+const HAS_REASON = ["ActionNeeded", "NeedsReview", "EnrichFailed", "Excluded", "Skipped"];
+// A URL the enricher hasn't read yet has no company or title: show the URL instead.
+const titleOf = (j) => j.title || j.listingUrl || j.applyUrl || "(no title)";
+const companyOf = (j) => j.company || (j.status === "Discovered" || j.status === "Enriching" ? "not read yet" : "");
 const REFRESH_MS = 15000;
 
 // ── State ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -110,8 +117,8 @@ function renderRows() {
 
   $("rows").innerHTML = state.jobs.map((j) => `
     <tr data-id="${j.id}" tabindex="0" class="${j.id === state.openId ? "selected" : ""}">
-      <td><div class="job-title">${esc(j.title)}</div><div class="job-company">${esc(j.company)}</div></td>
-      <td>${badge(j.status)}${j.status === "ActionNeeded" && j.actionDesc ? `<div class="dim" style="font-size:13px;max-width:260px">${esc(j.actionDesc)}</div>` : ""}</td>
+      <td><div class="job-title">${esc(titleOf(j))}</div><div class="job-company">${esc(companyOf(j))}</div></td>
+      <td>${badge(j.status)}${HAS_REASON.includes(j.status) && j.actionDesc ? `<div class="dim" style="font-size:13px;max-width:260px">${esc(j.actionDesc)}</div>` : ""}</td>
       <td class="opt">${esc(j.location ?? "")}${remoteTag(j)}</td>
       <td class="opt nowrap">${esc(fmtPay(j))}</td>
       <td class="opt nowrap dim">${esc(j.datePosted ?? "")}</td>
@@ -275,8 +282,8 @@ function readDetails(form) {
 }
 
 function renderDrawer(j, jdText) {
-  $("drawerCompany").textContent = j.company;
-  $("drawerTitle").textContent = j.title;
+  $("drawerCompany").textContent = companyOf(j);
+  $("drawerTitle").textContent = titleOf(j);
   const links = [
     j.listingUrl && `<a href="${esc(j.listingUrl)}" target="_blank" rel="noopener">Listing</a>`,
     j.applyUrl && `<a href="${esc(j.applyUrl)}" target="_blank" rel="noopener">Apply page</a>`,
@@ -291,7 +298,7 @@ function renderDrawer(j, jdText) {
   $("drawerBody").innerHTML = `
     <section class="block">
       <h3>Status</h3>
-      ${j.status === "ActionNeeded" && j.actionDesc ? `<p class="hint">${esc(j.actionDesc)}</p>` : ""}
+      ${HAS_REASON.includes(j.status) && j.actionDesc ? `<p class="hint">${esc(j.actionDesc)}</p>` : ""}
       ${j.lastError ? `<p class="hint">Last tailoring error: ${esc(j.lastError)}</p>` : ""}
       <form id="statusForm" class="row">
         ${field("status", "Change to", SETTABLE.includes(j.status) ? j.status : "", { options: [["", "Choose a status"], ...statusOptions] })}
@@ -385,7 +392,7 @@ function wireDrawer(j) {
   }));
 
   $("deleteJob").addEventListener("click", () => {
-    $("deleteArea").innerHTML = `<span>Delete ${esc(j.company)} – ${esc(j.title)}?</span>
+    $("deleteArea").innerHTML = `<span>Delete ${esc(companyOf(j))} – ${esc(titleOf(j))}?</span>
       <button class="btn danger solid" type="button" id="confirmDelete">Delete job</button>
       <button class="btn ghost" type="button" id="cancelDelete">Keep it</button>`;
     $("cancelDelete").addEventListener("click", () => renderDrawer(j, $("jdForm").elements.text.value));

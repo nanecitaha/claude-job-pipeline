@@ -455,6 +455,12 @@ var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;
 
+foreach (var (p, f) in new[] { EnrichLogicTests.Run(), EnrichStoreTests.Run() })
+{
+    passed += p;
+    failures += f;
+}
+
 Console.WriteLine($"\n{passed} passed, {failures} failed");
 return failures == 0 ? 0 : 1;
 

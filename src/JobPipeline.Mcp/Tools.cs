@@ -30,7 +30,8 @@ public static class Tools
             }),
 
         new("add_jobs",
-            "Save found postings, 1-25 per call. Already-stored jobs come back as 'duplicate', so resending is safe.",
+            "Save postings with full details, 1-25 per call. Already-stored jobs come back as 'duplicate'; a URL the " +
+            "enricher couldn't read comes back 'filled'. Prefer add_urls: it needs no description.",
             """
             {"type":"object","required":["jobs"],"properties":{"jobs":{"type":"array","minItems":1,"maxItems":25,"items":{
               "type":"object","required":["source","company","title","jdText"],
@@ -65,6 +66,26 @@ public static class Tools
                 return new { results };
             }),
 
+        new("add_urls",
+            "Save posting URLs (1-200 per call) for the enricher, which reads each posting and fills in the job. " +
+            "Returns counts; already-tracked URLs count as duplicates.",
+            """
+            {"type":"object","required":["source","urls"],"properties":{
+              "source":{"type":"string","description":"Site they were found on, e.g. builtin"},
+              "urls":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"string"}}}}
+            """,
+            a =>
+            {
+                var urls = a.GetProperty("urls").Deserialize<List<string?>>(ArgOptions) ?? [];
+                var results = store.AddUrls(Str(a, "source") ?? "", urls);
+                return new
+                {
+                    added = results.Count(r => r.Result == "added"),
+                    duplicate = results.Count(r => r.Result == "duplicate"),
+                    rejected = results.Where(r => r.Result == "rejected").Select(r => new { r.Url, r.Error }).ToList(),
+                };
+            }),
+
         new("find_jobs",
             "Stored jobs matching a company (and optional title), best first, with a 0-1 score.",
             """
@@ -87,7 +108,7 @@ public static class Tools
         new("list_jobs",
             "Jobs, most recently updated first, optionally filtered by status.",
             """
-            {"type":"object","properties":{"status":{"type":"string","enum":["New","Tailoring","ReadyToApply","Applying","Applied","Interviewing","Rejected","ActionNeeded","Skipped","Expired","Failed"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}}
+            {"type":"object","properties":{"status":{"type":"string","enum":["Discovered","Enriching","New","Tailoring","ReadyToApply","Applying","Applied","Interviewing","Rejected","NeedsReview","ActionNeeded","EnrichFailed","Excluded","Skipped","Expired","Failed"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}}
             """,
             a => store.ListJobs(Str(a, "status") is { } s ? Parse<JobStatus>(s) : null, Int(a, "limit") ?? 50, Int(a, "offset") ?? 0)),
 
@@ -140,8 +161,8 @@ public static class Tools
             a => Brief(store.CloseJob(Id(a), Parse<JobStatus>(Str(a, "outcome")!), Str(a, "reason")!, "apply"))),
 
         new("resolve_action",
-            "Only when the user says so, for an ActionNeeded or Failed job: 'retry' requeues, 'applied' records a manual " +
-            "application, 'skip' drops it.",
+            "Only when the user says so, for an ActionNeeded, Failed, NeedsReview, Excluded or EnrichFailed job: 'retry' " +
+            "requeues (keeps a reviewed job; re-reads an EnrichFailed one), 'applied' records a manual application, 'skip' drops it.",
             """
             {"type":"object","required":["id","outcome"],"properties":{"id":{"type":"string"},"outcome":{"type":"string","enum":["retry","applied","skip"]},"note":{"type":"string"}}}
             """,

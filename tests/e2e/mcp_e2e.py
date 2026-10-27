@@ -48,6 +48,11 @@ err, added = call("add_jobs", {"jobs": [
 ]})
 assert "stats" not in added, "add_jobs result stays small: stats come from pipeline_stats"
 print("add_jobs:", [(r["company"], r["result"]) for r in added["results"]], call("pipeline_stats", {})[1]["New"], "new")
+err, au = call("add_urls", {"source": "builtin", "urls": [
+    "https://builtin.com/job/x/10", "https://builtin.com/job/x/10?utm_source=a", "https://builtin.com/job/acme/1", "nope"]})
+assert not err and au["added"] == 1 and au["duplicate"] == 2 and au["rejected"][0]["url"] == "nope", au
+assert call("pipeline_stats", {})[1]["Discovered"] == 1
+print("add_urls:", au)
 err, msg = call("add_jobs", {"jobs": [{"source": "x", "company": "", "title": "t", "listingUrl": "u", "jdText": "j"}]})
 print("invalid job:", msg["results"][0]["result"], "-", msg["results"][0]["error"])
 
@@ -100,6 +105,22 @@ print("bad arg:", call("list_jobs", {"status": "Nope"})[1][:50])
 print("stats:", {k: v for k, v in call("pipeline_stats", {})[1].items() if v})
 stats = call("pipeline_stats", {})[1]
 assert stats["Interviewing"] == 1 and stats["ReadyToApply"] == 1 and stats["ActionNeeded"] == 1, stats
+# The enricher starts, finds its data folder and filters, and idles on an empty queue (no network needed).
+E = tempfile.mkdtemp(prefix="jp-e2e-enrich-")
+enr = subprocess.Popen(["dotnet", os.path.join("src","JobPipeline.Enricher","bin","Debug","net8.0","JobPipeline.Enricher.dll")],
+                       env=dict(os.environ, Enrich__DataDir=E, Enrich__PollSeconds="5"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+started = ""
+deadline = time.time() + 30
+while time.time() < deadline:
+    line = enr.stdout.readline()
+    if not line: break
+    if "Enricher started" in line: started = line.strip(); break
+enr.terminate()
+try: enr.communicate(timeout=10)
+except subprocess.TimeoutExpired: enr.kill()
+assert started, "enricher did not start"
+assert os.path.exists(os.path.join(E, "tech-terms.txt")), "starter tech-terms.txt written"
+print("enricher:", started[-120:])
 print("E2E PASS")
 mcp.stdin.close(); mcp.wait(timeout=10)
 print("mcp stderr:", mcp.stderr.read().strip())

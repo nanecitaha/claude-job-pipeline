@@ -6,8 +6,12 @@ namespace JobPipeline.Core;
 /// One status per job replaces the isApplied / readyToApply / actionNeeded / isInterviewScheduled flags,
 /// so impossible combinations (applied AND blocked) can't exist.
 ///
-///   New → Tailoring → ReadyToApply → Applying → Applied → Interviewing | Rejected
-///                                       ↘ ActionNeeded / Skipped / Expired / Failed
+///   Discovered → Enriching → New → Tailoring → ReadyToApply → Applying → Applied → Interviewing | Rejected
+///        ↘ NeedsReview / Excluded / EnrichFailed / Skipped (duplicate) / Expired
+///                                  ↘ ActionNeeded / Skipped / Expired / Failed
+///
+/// Jobs added with full details (add_jobs) start at New. Jobs added as a bare URL (add_urls) start at Discovered
+/// and the enricher fills them in.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<JobStatus>))]
 public enum JobStatus
@@ -23,7 +27,18 @@ public enum JobStatus
     Skipped,
     Expired,
     Failed,        // tailoring failed MaxTailorAttempts times: see LastError
+    Discovered,    // bare URL from the hunt, waiting for the enricher
+    Enriching,     // enricher has claimed it
+    NeedsReview,   // enriched, but a rule couldn't decide keep or exclude: see ActionDesc
+    Excluded,      // enriched and filtered out by a hunt rule: see ActionDesc
+    EnrichFailed,  // the enricher couldn't read the posting: see ActionDesc / LastError
 }
+
+/// <summary>What the enricher decided about a posting it filled in.</summary>
+public enum EnrichVerdict { Keep, Review, Exclude }
+
+/// <summary>Why an enrichment attempt failed: worth retrying, never going to work, or the posting is gone.</summary>
+public enum EnrichFailure { Transient, Permanent, Gone }
 
 [JsonConverter(typeof(JsonStringEnumConverter<EmailType>))]
 public enum EmailType { Confirmation, Rejection, Interview, Assessment, Other }
@@ -59,6 +74,7 @@ public sealed class Job
     public string? LastError { get; set; }
     public int TailorAttempts { get; set; }
     public int ApplyAttempts { get; set; }
+    public int EnrichAttempts { get; set; }
     public DateTimeOffset? DateApplied { get; set; }
     public DateTimeOffset? InterviewDate { get; set; }
     public List<EmailEvent> Emails { get; set; } = new();

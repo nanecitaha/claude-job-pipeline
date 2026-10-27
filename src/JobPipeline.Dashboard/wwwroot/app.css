@@ -22,6 +22,11 @@
   --s-Skipped: #8a949c;
   --s-Expired: #a0a8ae;
   --s-Failed: #b4372f;
+  --s-Discovered: #8796a3;
+  --s-Enriching: #5d7fa8;
+  --s-NeedsReview: #a8740f;
+  --s-Excluded: #9aa3a9;
+  --s-EnrichFailed: #a3483b;
 
   --radius-s: 4px;
   --radius-m: 8px;

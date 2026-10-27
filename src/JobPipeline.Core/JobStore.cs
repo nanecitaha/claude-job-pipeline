@@ -68,47 +68,222 @@ public sealed partial class JobStore
             "listingUrl or applyUrl is required");
 
         var key = Dedupe.Key(input.Company, input.Title);
+        var company = Dedupe.Company(input.Company);
         return Mutate(db =>
         {
-            var dup = db.Jobs.FirstOrDefault(j =>
-                j.DedupeKey == key
+            var matches = db.Jobs.Where(j =>
+                (j.DedupeKey.Length > 0 && j.DedupeKey == key)
                 || (!string.IsNullOrWhiteSpace(input.ExternalJobId) && j.ExternalJobId == input.ExternalJobId
-                    && string.Equals(j.Source, input.Source, StringComparison.OrdinalIgnoreCase))
+                    && string.Equals(j.Source, input.Source, StringComparison.OrdinalIgnoreCase)
+                    && Dedupe.Company(j.Company) == company)
                 || SameUrl(j.ApplyUrl, input.ApplyUrl) || SameUrl(j.ListingUrl, input.ListingUrl)
-                || SameUrl(j.ApplyUrl, input.ListingUrl) || SameUrl(j.ListingUrl, input.ApplyUrl));
-            if (dup is not null)
+                || SameUrl(j.ApplyUrl, input.ListingUrl) || SameUrl(j.ListingUrl, input.ApplyUrl)).ToList();
+
+            // A real job already tracked wins. A URL the enricher hasn't read yet (Discovered) or couldn't read
+            // (EnrichFailed) is a placeholder: the details sent here fill it in instead of making a second row.
+            if (matches.FirstOrDefault(j => !IsPlaceholder(j)) is { } dup)
                 return (new AddResult(dup.Id, "duplicate", dup.Status), false);
 
-            var job = new Job
+            var job = matches.FirstOrDefault();
+            var filled = job is not null;
+            if (job is null)
             {
-                Id = Guid.NewGuid(),
-                Source = input.Source.Trim(),
-                Company = input.Company.Trim(),
-                Title = input.Title.Trim(),
-                MatchedTitle = input.MatchedTitle,
-                ListingUrl = Blank(input.ListingUrl),
-                ApplyUrl = Blank(input.ApplyUrl),
-                ExternalJobId = Blank(input.ExternalJobId),
-                Location = Blank(input.Location),
-                IsRemote = input.IsRemote,
-                SalaryMin = input.SalaryMin,
-                SalaryMax = input.SalaryMax,
-                SalaryCurrency = Blank(input.SalaryCurrency),
-                SalaryText = Blank(input.SalaryText),
-                TechStack = input.TechStack?.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToList() ?? new(),
-                DatePosted = Blank(input.DatePosted),
-                IsEasyApply = input.IsEasyApply,
-                DedupeKey = key,
-                CreatedAt = Now,
-                UpdatedAt = Now,
-            };
+                job = new Job { Id = Guid.NewGuid(), CreatedAt = Now };
+                db.Jobs.Add(job);
+            }
+            job.Source = Blank(input.Source) ?? job.Source;
+            job.Company = input.Company.Trim();
+            job.Title = input.Title.Trim();
+            job.MatchedTitle = input.MatchedTitle;
+            job.ListingUrl = Blank(input.ListingUrl) ?? job.ListingUrl;
+            job.ApplyUrl = Blank(input.ApplyUrl) ?? job.ApplyUrl;
+            job.ExternalJobId = Blank(input.ExternalJobId);
+            job.Location = Blank(input.Location);
+            job.IsRemote = input.IsRemote;
+            job.SalaryMin = input.SalaryMin;
+            job.SalaryMax = input.SalaryMax;
+            job.SalaryCurrency = Blank(input.SalaryCurrency);
+            job.SalaryText = Blank(input.SalaryText);
+            job.TechStack = CleanStack(input.TechStack);
+            job.DatePosted = Blank(input.DatePosted);
+            job.IsEasyApply = input.IsEasyApply;
+            job.DedupeKey = key;
+            job.ActionDesc = null;
+            job.LastError = null;
+            job.UpdatedAt = Now;
             if (!string.IsNullOrWhiteSpace(input.JdText))
                 db.PendingJds[job.Id] = input.JdText;   // saved in the same transaction as the job
-            job.History.Add(new StatusChange(null, JobStatus.New, Now, by, null));
-            db.Jobs.Add(job);
-            return (new AddResult(job.Id, "added", JobStatus.New), true);
+            if (filled) Move(job, JobStatus.New, by, "details added by hand or by Claude");
+            else
+            {
+                job.Status = JobStatus.New;
+                job.History.Add(new StatusChange(null, JobStatus.New, Now, by, null));
+            }
+            return (new AddResult(job.Id, filled ? "filled" : "added", JobStatus.New), true);
         });
     }
+
+    /// <summary>
+    /// Saves bare posting URLs for the enricher to fill in (status Discovered). A URL already tracked, in any
+    /// status, comes back as 'duplicate'; repeats within the batch too. Tracking parameters don't make a URL new.
+    /// </summary>
+    public IReadOnlyList<UrlAddResult> AddUrls(string source, IEnumerable<string?> urls, string by = "hunt")
+    {
+        Require(!string.IsNullOrWhiteSpace(source), "source is required");
+        var list = urls.ToList();
+        Require(list.Count is > 0 and <= 200, "send 1 to 200 urls per call");
+        return Mutate(db =>
+        {
+            var results = new List<UrlAddResult>();
+            foreach (var raw in list)
+            {
+                var url = raw?.Trim() ?? "";
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var u) || u.Scheme is not ("http" or "https"))
+                {
+                    results.Add(new UrlAddResult(url, "rejected", null, null, "not an http(s) URL"));
+                    continue;
+                }
+                if (db.Jobs.FirstOrDefault(j => SameUrl(j.ListingUrl, url) || SameUrl(j.ApplyUrl, url)) is { } dup)
+                {
+                    results.Add(new UrlAddResult(url, "duplicate", dup.Id, dup.Status, null));
+                    continue;
+                }
+                var job = new Job
+                {
+                    Id = Guid.NewGuid(),
+                    Status = JobStatus.Discovered,
+                    Source = source.Trim(),
+                    ListingUrl = url,
+                    CreatedAt = Now,
+                    UpdatedAt = Now,
+                };
+                job.History.Add(new StatusChange(null, JobStatus.Discovered, Now, by, null));
+                db.Jobs.Add(job);
+                results.Add(new UrlAddResult(url, "added", job.Id, JobStatus.Discovered, null));
+            }
+            return (results, results.Any(r => r.Result == "added"));
+        });
+    }
+
+    static bool IsPlaceholder(Job j) => j.Status is JobStatus.Discovered or JobStatus.EnrichFailed;
+
+    static List<string> CleanStack(IEnumerable<string>? terms) =>
+        terms?.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => t.Trim()).Distinct().ToList() ?? new();
+
+    // ───────────────────────────── Enricher ─────────────────────────────
+
+    /// <summary>
+    /// Atomically claims the oldest Discovered job (or an Enriching job whose enricher died more than
+    /// <paramref name="staleAfter"/> ago) and moves it to Enriching. A job that already failed waits
+    /// <paramref name="retryDelay"/> × attempts before it is tried again.
+    /// </summary>
+    public Job? ClaimForEnrichment(TimeSpan staleAfter, TimeSpan retryDelay, string by = "enricher") => Mutate<Job?>(db =>
+    {
+        var now = Now;
+        var job = db.Jobs
+            .Where(j => (j.Status == JobStatus.Discovered && (j.EnrichAttempts == 0 || j.UpdatedAt <= now - retryDelay * j.EnrichAttempts))
+                        || (j.Status == JobStatus.Enriching && j.UpdatedAt < now - staleAfter))
+            .OrderBy(j => j.CreatedAt)
+            .FirstOrDefault();
+        if (job is null) return (null, false);
+        job.EnrichAttempts++;
+        Move(job, JobStatus.Enriching, by, job.Status == JobStatus.Enriching ? "reclaimed stale claim" : null);
+        return (Clone(job), true);
+    });
+
+    /// <summary>
+    /// Saves what the enricher read and applies its verdict: Keep → New (the tailoring worker picks it up),
+    /// Review → NeedsReview, Exclude → Excluded. A posting that turns out to be a job already tracked (same
+    /// company and title, or same apply URL) is closed as Skipped and points at the original.
+    /// </summary>
+    public Job CompleteEnrichment(Guid id, NewJob e, EnrichVerdict verdict, string? reason, string by = "enricher") => Mutate(db =>
+    {
+        Require(!string.IsNullOrWhiteSpace(e.Company), "company is required");
+        Require(!string.IsNullOrWhiteSpace(e.Title), "title is required");
+        Require(verdict != EnrichVerdict.Keep || !string.IsNullOrWhiteSpace(e.JdText),
+            "a kept job needs its description: the tailoring worker reads it");
+        var job = Get(db, id);
+        Expect(job, JobStatus.Enriching);
+
+        job.Company = e.Company.Trim();
+        job.Title = e.Title.Trim();
+        job.MatchedTitle = Blank(e.MatchedTitle);
+        job.ApplyUrl = Blank(e.ApplyUrl) ?? job.ApplyUrl;
+        job.ExternalJobId = Blank(e.ExternalJobId);
+        job.Location = Blank(e.Location);
+        job.IsRemote = e.IsRemote;
+        job.SalaryMin = e.SalaryMin;
+        job.SalaryMax = e.SalaryMax;
+        job.SalaryCurrency = Blank(e.SalaryCurrency);
+        job.SalaryText = Blank(e.SalaryText);
+        job.TechStack = CleanStack(e.TechStack);
+        job.DatePosted = Blank(e.DatePosted);
+        job.IsEasyApply = e.IsEasyApply;
+        job.DedupeKey = Dedupe.Key(job.Company, job.Title);
+        job.LastError = null;
+
+        var dup = db.Jobs.FirstOrDefault(o => o.Id != job.Id && !IsPlaceholder(o) && o.Status != JobStatus.Enriching
+            && (SameUrl(o.ApplyUrl, job.ApplyUrl) || SameUrl(o.ListingUrl, job.ApplyUrl)
+                || (o.DedupeKey == job.DedupeKey && !DifferentPostingsOnSameBoard(o.ApplyUrl, job.ApplyUrl))));
+        if (dup is not null)
+        {
+            job.ActionDesc = $"Duplicate of {dup.Company} – {dup.Title} ({dup.Id}, {dup.Status})";
+            Move(job, JobStatus.Skipped, by, "duplicate");
+            return (Clone(job), true);
+        }
+
+        if (!string.IsNullOrWhiteSpace(e.JdText)) db.PendingJds[job.Id] = e.JdText;
+        switch (verdict)
+        {
+            case EnrichVerdict.Keep:
+                job.ActionDesc = null;
+                Move(job, JobStatus.New, by, Blank(reason));
+                break;
+            case EnrichVerdict.Review:
+                job.ActionDesc = Blank(reason) ?? "Check whether this posting fits.";
+                Move(job, JobStatus.NeedsReview, by, job.ActionDesc);
+                break;
+            default:
+                job.ActionDesc = Blank(reason) ?? "Excluded by a hunt rule.";
+                Move(job, JobStatus.Excluded, by, job.ActionDesc);
+                break;
+        }
+        return (Clone(job), true);
+    });
+
+    /// <summary>
+    /// Records a failed enrichment. Gone (404/410, closed posting) → Expired. Permanent, or a transient failure on
+    /// the last allowed attempt → EnrichFailed. Otherwise back to Discovered for a later retry.
+    /// </summary>
+    public Job FailEnrichment(Guid id, string error, EnrichFailure kind, int maxAttempts, string by = "enricher") => Mutate(db =>
+    {
+        var job = Get(db, id);
+        Expect(job, JobStatus.Enriching);
+        job.LastError = error;
+        if (kind == EnrichFailure.Gone)
+        {
+            job.ActionDesc = error;
+            Move(job, JobStatus.Expired, by, error);
+        }
+        else if (kind == EnrichFailure.Permanent || job.EnrichAttempts >= maxAttempts)
+        {
+            job.ActionDesc = error;
+            Move(job, JobStatus.EnrichFailed, by, error);
+        }
+        else
+        {
+            Move(job, JobStatus.Discovered, by, error);
+        }
+        return (Clone(job), true);
+    });
+
+    /// <summary>
+    /// Two apply URLs on the same host with different paths are two postings (e.g. the same title in two teams),
+    /// even when company and title match.
+    /// </summary>
+    static bool DifferentPostingsOnSameBoard(string? a, string? b) =>
+        Uri.TryCreate(a, UriKind.Absolute, out var x) && Uri.TryCreate(b, UriKind.Absolute, out var y)
+        && string.Equals(x.Host, y.Host, StringComparison.OrdinalIgnoreCase) && !SameUrl(a, b);
 
     // ───────────────────────────── Worker ─────────────────────────────
 
@@ -235,7 +410,8 @@ public sealed partial class JobStore
     {
         Require(outcome is JobStatus.Expired or JobStatus.Skipped, "outcome must be Expired or Skipped");
         var job = Get(db, id);
-        Expect(job, JobStatus.New, JobStatus.ReadyToApply, JobStatus.Applying, JobStatus.ActionNeeded, JobStatus.Failed);
+        Expect(job, JobStatus.New, JobStatus.ReadyToApply, JobStatus.Applying, JobStatus.ActionNeeded, JobStatus.Failed,
+            JobStatus.NeedsReview, JobStatus.EnrichFailed);
         job.ActionDesc = reason;
         Move(job, outcome, by, reason);
         return (Clone(job), true);
@@ -278,13 +454,22 @@ public sealed partial class JobStore
         return (Clone(job), true);
     });
 
-    /// <summary>You clearing a blocker: retry it, record that you applied by hand, or drop it.</summary>
+    /// <summary>
+    /// You clearing a blocker: retry it, record that you applied by hand, or drop it. Retry on a NeedsReview or
+    /// Excluded job means "keep it" (on to tailoring); on an EnrichFailed job it lets the enricher try again.
+    /// </summary>
     public Job ResolveAction(Guid id, ResolveOutcome outcome, string? note, string by = "you") => Mutate(db =>
     {
         var job = Get(db, id);
-        Expect(job, JobStatus.ActionNeeded, JobStatus.Failed);
+        Expect(job, JobStatus.ActionNeeded, JobStatus.Failed, JobStatus.NeedsReview, JobStatus.Excluded, JobStatus.EnrichFailed);
         switch (outcome)
         {
+            case ResolveOutcome.Retry when job.Status == JobStatus.EnrichFailed:
+                job.ActionDesc = null;
+                job.LastError = null;
+                job.EnrichAttempts = 0;
+                Move(job, JobStatus.Discovered, by, note ?? "retry enrichment");
+                break;
             case ResolveOutcome.Retry:
                 job.ActionDesc = null;
                 job.LastError = null;
@@ -377,8 +562,8 @@ public sealed partial class JobStore
     /// </summary>
     public Job SetStatus(Guid id, JobStatus to, string? note, string by = "you") => Mutate(db =>
     {
-        Require(to is not (JobStatus.Tailoring or JobStatus.Applying),
-            $"{to} is set by the pipeline itself; choose New to re-tailor or ReadyToApply to queue for applying");
+        Require(to is not (JobStatus.Tailoring or JobStatus.Applying or JobStatus.Enriching),
+            $"{to} is set by the pipeline itself; choose New to re-tailor, ReadyToApply to queue for applying, or Discovered to re-read the posting");
         var job = Get(db, id);
         note = Blank(note);
         switch (to)
@@ -397,7 +582,15 @@ public sealed partial class JobStore
                 job.DateApplied ??= Now;
                 job.ActionDesc = null;
                 break;
-            case JobStatus.ActionNeeded or JobStatus.Skipped or JobStatus.Expired:
+            case JobStatus.Discovered:
+                Require(!string.IsNullOrWhiteSpace(job.ListingUrl) || !string.IsNullOrWhiteSpace(job.ApplyUrl),
+                    "this job has no URL to read");
+                job.EnrichAttempts = 0;
+                job.LastError = null;
+                job.ActionDesc = null;
+                break;
+            case JobStatus.ActionNeeded or JobStatus.Skipped or JobStatus.Expired
+                or JobStatus.NeedsReview or JobStatus.Excluded or JobStatus.EnrichFailed:
                 job.ActionDesc = note ?? job.ActionDesc ?? $"{to} (set by you)";
                 break;
         }
@@ -545,17 +738,34 @@ public sealed partial class JobStore
 
     static string? Blank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
-    static bool SameUrl(string? a, string? b)
+    static bool SameUrl(string? a, string? b) =>
+        !string.IsNullOrWhiteSpace(a) && !string.IsNullOrWhiteSpace(b) && NormalizeUrl(a) == NormalizeUrl(b);
+
+    /// <summary>Query parameters that only say where a click came from; they never identify a posting.</summary>
+    static readonly HashSet<string> TrackingParams = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return false;
-        static string N(string u)
-        {
-            u = u.Trim();
-            var cut = u.IndexOfAny(new[] { '?', '#' });     // tracking params differ between sources
-            if (cut >= 0) u = u[..cut];
-            return u.TrimEnd('/').Replace("http://", "https://").ToLowerInvariant();
-        }
-        return N(a) == N(b);
+        "ref", "refid", "referrer", "src", "source", "trid", "oga", "gclid", "fbclid", "mc_cid", "mc_eid",
+        "lever-source", "lever-origin", "gh_src", "trk", "trackingid", "from", "campaign", "iis",
+    };
+
+    /// <summary>
+    /// Comparable form of a URL: https, lowercase host without "www.", no trailing slash or fragment, and only the
+    /// query parameters that identify the page (Indeed's ?jk=, Greenhouse's ?gh_jid=, …), sorted.
+    /// </summary>
+    public static string NormalizeUrl(string url)
+    {
+        url = url.Trim();
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var u))
+            return url.TrimEnd('/').ToLowerInvariant();
+        var host = u.Host.ToLowerInvariant();
+        if (host.StartsWith("www.")) host = host[4..];
+        var query = u.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2))
+            .Where(p => !TrackingParams.Contains(p[0]) && !p[0].StartsWith("utm_", StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Length == 2 ? $"{p[0].ToLowerInvariant()}={p[1]}" : p[0].ToLowerInvariant())
+            .OrderBy(p => p, StringComparer.Ordinal);
+        var q = string.Join('&', query);
+        return $"https://{host}{u.AbsolutePath.TrimEnd('/').ToLowerInvariant()}{(q.Length > 0 ? "?" + q : "")}";
     }
 
     static Job Clone(Job j) => JsonSerializer.Deserialize<Job>(JsonSerializer.Serialize(j, Json), Json)!;
@@ -787,6 +997,8 @@ public enum ResolveOutcome { Retry, Applied, Skip }
 public sealed class PipelineException(string message) : Exception(message);
 
 public sealed record AddResult(Guid Id, string Result, JobStatus Status);
+
+public sealed record UrlAddResult(string Url, string Result, Guid? Id, JobStatus? Status, string? Error);
 
 public sealed record ApplyRun(
     IReadOnlyList<JobSummary> Interrupted, IReadOnlyList<JobSummary> ManualApply, IReadOnlyList<JobSummary> Ready, int AppliedToday);
