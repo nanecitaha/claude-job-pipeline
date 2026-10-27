@@ -67,6 +67,14 @@ public static class Configs
         - Internships, new-grad, junior or entry-level roles
         - Requires a security clearance you don't have
 
+        ## Filters (applied by the enricher to every URL the hunt saves)
+        Comma-separated, case-insensitive, whole words. Kept = matches require_any and nothing below. Anything the
+        rules can't decide goes to NeedsReview for you, never silently dropped. An empty line turns that rule off.
+        - require_any: C#, .NET, dotnet, ASP.NET            # at least one, anywhere in the title or description
+        - exclude_title: intern, internship, new grad, new graduate, junior, jr, entry level, entry-level, apprentice
+        - review_if: security clearance, clearance required, active clearance, TS/SCI, top secret, polygraph
+        - role_words: engineer, engineering, developer, development, programmer, architect, software, devops, sre, swe, lead
+
         ## Experience rule
         - Don't skip a posting only because it asks for 1-2 more years than you have.
 

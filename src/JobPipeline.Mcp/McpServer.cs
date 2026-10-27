@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using JobPipeline.Core;
 
 namespace JobPipeline.Mcp;
@@ -14,6 +15,16 @@ public sealed class McpServer(IReadOnlyList<ToolDef> tools, string instructions)
     const string Name = "job-pipeline";
     const string Version = "1.0.0";
     const string FallbackProtocol = "2025-06-18";
+
+    /// <summary>
+    /// Tool results go into Claude's context on every call, so they're written compact and without null fields:
+    /// indentation and "x": null pairs are pure token cost.
+    /// </summary>
+    public static readonly JsonSerializerOptions Wire = new(JobStore.Json)
+    {
+        WriteIndented = false,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     readonly Dictionary<string, ToolDef> _tools = tools.ToDictionary(t => t.Name);
 
@@ -102,7 +113,7 @@ public sealed class McpServer(IReadOnlyList<ToolDef> tools, string instructions)
         try
         {
             var result = tool.Handler(args);
-            return ToolResult(JsonSerializer.Serialize(result, JobStore.Json), isError: false);
+            return ToolResult(JsonSerializer.Serialize(result, Wire), isError: false);
         }
         catch (Exception ex) when (ex is PipelineException or ArgumentException or FormatException or JsonException or KeyNotFoundException)
         {

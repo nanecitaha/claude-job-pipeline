@@ -6,21 +6,17 @@ namespace JobPipeline.Mcp;
 public static class Tools
 {
     public const string Instructions =
-        "Job pipeline store. Statuses: New → Tailoring → ReadyToApply → Applying → Applied → Interviewing|Rejected, " +
-        "with exits ActionNeeded, Skipped, Expired, Failed. The hunt only adds jobs (add_jobs). A separate .NET worker " +
-        "tailors resumes and moves jobs to ReadyToApply. Applying: call begin_apply_run first, then start_apply right " +
-        "before opening each form, then mark_applied or flag_action. Never edit jobs.db directly.";
+        "Job pipeline store. Statuses: New → Tailoring → ReadyToApply → Applying → Applied → Interviewing|Rejected; " +
+        "exits ActionNeeded, Skipped, Expired, Failed. The job-hunt, job-apply and job-email-sync skills say when to " +
+        "call each tool. Fields left out of a result are null.";
 
     static readonly JsonSerializerOptions ArgOptions = new(JobStore.Json) { PropertyNameCaseInsensitive = true };
 
     public static IReadOnlyList<ToolDef> Create(JobStore store) =>
     [
         new("get_config",
-            "Read one of your pipeline config files. 'hunt' = target titles, similar titles, exclusions, sites to search " +
-            "and apply rules. 'profile' = applicant answers for application forms (contact, authorization, salary, etc.). " +
-            "'resume' = the user's master (untailored) resume, the second source for form answers such as work history " +
-            "and years of experience. 'isSetUp' is false while a file still has [fill] fields or the resume placeholder. " +
-            "Read 'hunt' before every hunt, and all three before every apply run.",
+            "Read a config file: 'hunt' (filters, sites, apply rules), 'profile' (form answers) or 'resume' (master " +
+            "resume). isSetUp is false while it still has [fill] fields or the resume placeholder.",
             """
             {"type":"object","properties":{"name":{"type":"string","enum":["hunt","profile","resume"]}},"required":["name"]}
             """,
@@ -34,10 +30,8 @@ public static class Tools
             }),
 
         new("add_jobs",
-            "Save newly found postings (1-25 per call). Duplicates of jobs already stored (same company+title, same URL, " +
-            "or same source+job id) are reported as 'duplicate' and not added, so it is safe to resend. jdText must be " +
-            "the full job description as plain text; the worker tailors from it. Copy techStack terms exactly as written " +
-            "in the posting (same spelling, capitalization, hyphens).",
+            "Save postings with full details, 1-25 per call. Already-stored jobs come back as 'duplicate'; a URL the " +
+            "enricher couldn't read comes back 'filled'. Prefer add_urls: it needs no description.",
             """
             {"type":"object","required":["jobs"],"properties":{"jobs":{"type":"array","minItems":1,"maxItems":25,"items":{
               "type":"object","required":["source","company","title","jdText"],
@@ -57,7 +51,7 @@ public static class Tools
                 "techStack":{"type":"array","items":{"type":"string"}},
                 "datePosted":{"type":"string","description":"yyyy-MM-dd"},
                 "isEasyApply":{"type":"boolean"},
-                "jdText":{"type":"string"}
+                "jdText":{"type":"string","description":"Full job description, plain text"}
               }}}}}
             """,
             a =>
@@ -69,32 +63,52 @@ public static class Tools
                     try { var r = store.AddJob(j); return (object)new { j.Company, j.Title, r.Id, r.Result, r.Status }; }
                     catch (PipelineException ex) { return new { j.Company, j.Title, Result = "rejected", Error = ex.Message }; }
                 }).ToList();
-                return new { results, stats = store.Stats() };
+                return new { results };
+            }),
+
+        new("add_urls",
+            "Save posting URLs (1-200 per call) for the enricher, which reads each posting and fills in the job. " +
+            "Returns counts; already-tracked URLs count as duplicates.",
+            """
+            {"type":"object","required":["source","urls"],"properties":{
+              "source":{"type":"string","description":"Site they were found on, e.g. builtin"},
+              "urls":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"string"}}}}
+            """,
+            a =>
+            {
+                var urls = a.GetProperty("urls").Deserialize<List<string?>>(ArgOptions) ?? [];
+                var results = store.AddUrls(Str(a, "source") ?? "", urls);
+                return new
+                {
+                    added = results.Count(r => r.Result == "added"),
+                    duplicate = results.Count(r => r.Result == "duplicate"),
+                    rejected = results.Where(r => r.Result == "rejected").Select(r => new { r.Url, r.Error }).ToList(),
+                };
             }),
 
         new("find_jobs",
-            "Find stored jobs by company (and optionally title), best match first with a 0-1 score. Use it to match a " +
-            "Gmail message to a job before record_email, or to check whether a posting is already tracked.",
+            "Stored jobs matching a company (and optional title), best first, with a 0-1 score.",
             """
             {"type":"object","required":["company"],"properties":{"company":{"type":"string"},"title":{"type":"string"},"limit":{"type":"integer"}}}
             """,
             a => store.FindJobs(Str(a, "company")!, Str(a, "title"), Int(a, "limit") ?? 10)),
 
         new("get_job",
-            "Full record for one job, including status history and emails. includeJd=true also returns the job description text.",
+            "One job's details. includeJd adds the job description text; includeHistory adds status history and comments.",
             """
-            {"type":"object","required":["id"],"properties":{"id":{"type":"string"},"includeJd":{"type":"boolean"}}}
+            {"type":"object","required":["id"],"properties":{"id":{"type":"string"},"includeJd":{"type":"boolean"},"includeHistory":{"type":"boolean"}}}
             """,
             a =>
             {
                 var job = store.GetJob(Id(a)) ?? throw new PipelineException($"No job with id {Id(a)}");
-                return Bool(a, "includeJd") == true ? new { job, jdText = store.ReadJd(job) } : new { job, jdText = (string?)null };
+                object view = Bool(a, "includeHistory") == true ? job : Detail(job);
+                return new { job = view, jdText = Bool(a, "includeJd") == true ? store.ReadJd(job) : null };
             }),
 
         new("list_jobs",
-            "List jobs, most recently updated first, optionally filtered by status (e.g. ActionNeeded to see what is blocked on you).",
+            "Jobs, most recently updated first, optionally filtered by status.",
             """
-            {"type":"object","properties":{"status":{"type":"string","enum":["New","Tailoring","ReadyToApply","Applying","Applied","Interviewing","Rejected","ActionNeeded","Skipped","Expired","Failed"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}}
+            {"type":"object","properties":{"status":{"type":"string","enum":["Discovered","Enriching","New","Tailoring","ReadyToApply","Applying","Applied","Interviewing","Rejected","NeedsReview","ActionNeeded","EnrichFailed","Excluded","Skipped","Expired","Failed"]},"limit":{"type":"integer"},"offset":{"type":"integer"}}}
             """,
             a => store.ListJobs(Str(a, "status") is { } s ? Parse<JobStatus>(s) : null, Int(a, "limit") ?? 50, Int(a, "offset") ?? 0)),
 
@@ -103,20 +117,15 @@ public static class Tools
             _ => store.Stats()),
 
         new("begin_apply_run",
-            "Call once at the start of every apply run. Moves any job left in Applying by a crashed run to ActionNeeded " +
-            "(it may already have been submitted, so it must not be retried automatically), then returns the jobs ready " +
-            "to apply, how many were applied today, and per job how many other applications went to the same company in 30 days. " +
-            "Jobs at companies on the hunt config's manual-apply list are moved to ActionNeeded and returned in manualApply: " +
-            "never apply to those, by any URL.",
+            "Start an apply run. Returns interrupted (left mid-form by a crashed run, now ActionNeeded; never retry), " +
+            "manualApply (manual-apply companies, now ActionNeeded; never apply to these by any URL), ready, appliedToday.",
             """
             {"type":"object","properties":{"limit":{"type":"integer","description":"Max ready jobs to return (default 10)"}}}
             """,
             a => store.BeginApplyRun(Int(a, "limit") ?? 10, Configs.ManualApplyCompanies(store.DataDir))),
 
         new("start_apply",
-            "Call immediately before opening a job's application. Moves it ReadyToApply → Applying and returns the URLs " +
-            "and the absolute path of the tailored resume to upload. Fails if the job is not ReadyToApply or the company is on " +
-            "the manual-apply list.",
+            "Call right before opening a job's application: ReadyToApply → Applying. Returns the URLs and tailored resume path.",
             """
             {"type":"object","required":["id"],"properties":{"id":{"type":"string"}}}
             """,
@@ -131,42 +140,36 @@ public static class Tools
             }),
 
         new("mark_applied",
-            "Record a submitted application (Applying → Applied). Only call after the site showed a submission confirmation.",
+            "Applying → Applied. Only after the site showed a submission confirmation.",
             """
             {"type":"object","required":["id"],"properties":{"id":{"type":"string"},"note":{"type":"string","description":"e.g. confirmation text or what was submitted"}}}
             """,
-            a => store.MarkApplied(Id(a), Str(a, "note"))),
+            a => Brief(store.MarkApplied(Id(a), Str(a, "note")))),
 
         new("flag_action",
-            "Hand a job to the user: CAPTCHA, account creation or password required, 2FA, assessment, a question the " +
-            "profile cannot answer, upload blocked, or any other step needing a person. reason must say exactly what " +
-            "the user has to do and where it stopped.",
+            "Hand a job to the user (→ ActionNeeded). reason says exactly what they must do and where it stopped.",
             """
             {"type":"object","required":["id","reason"],"properties":{"id":{"type":"string"},"reason":{"type":"string"}}}
             """,
-            a => store.FlagAction(Id(a), Str(a, "reason")!)),
+            a => Brief(store.FlagAction(Id(a), Str(a, "reason")!))),
 
         new("close_job",
-            "Close a job without applying: 'expired' when the posting is gone or closed, 'skipped' when it turns out not " +
-            "to fit (onsite, clearance, wrong stack, cap reached for that company).",
+            "Close without applying: 'expired' (posting gone) or 'skipped' (doesn't fit, or company cap reached).",
             """
             {"type":"object","required":["id","outcome","reason"],"properties":{"id":{"type":"string"},"outcome":{"type":"string","enum":["expired","skipped"]},"reason":{"type":"string"}}}
             """,
-            a => store.CloseJob(Id(a), Parse<JobStatus>(Str(a, "outcome")!), Str(a, "reason")!, "apply")),
+            a => Brief(store.CloseJob(Id(a), Parse<JobStatus>(Str(a, "outcome")!), Str(a, "reason")!, "apply"))),
 
         new("resolve_action",
-            "For the user clearing a blocked (ActionNeeded) or Failed job: 'retry' puts it back in the queue, 'applied' " +
-            "records that they applied by hand, 'skip' drops it. Only call when the user says so.",
+            "Only when the user says so, for an ActionNeeded, Failed, NeedsReview, Excluded or EnrichFailed job: 'retry' " +
+            "requeues (keeps a reviewed job; re-reads an EnrichFailed one), 'applied' records a manual application, 'skip' drops it.",
             """
             {"type":"object","required":["id","outcome"],"properties":{"id":{"type":"string"},"outcome":{"type":"string","enum":["retry","applied","skip"]},"note":{"type":"string"}}}
             """,
-            a => store.ResolveAction(Id(a), Parse<ResolveOutcome>(Str(a, "outcome")!), Str(a, "note"))),
+            a => Brief(store.ResolveAction(Id(a), Parse<ResolveOutcome>(Str(a, "outcome")!), Str(a, "note")))),
 
         new("update_tech_stack",
-            "Replace one job's tech stack, e.g. after re-extracting it from the saved job description (get_job with " +
-            "includeJd=true) using the job-hunt skill's extraction rules. Jobs not yet applied to whose resume is already " +
-            "made go back to New so the worker re-tailors with the new list. Keywords in order of first appearance, " +
-            "copied exactly as written.",
+            "Replace one job's tech stack. A job not yet applied to is re-tailored with the new list.",
             """
             {"type":"object","required":["id","techStack"],"properties":{"id":{"type":"string"},"techStack":{"type":"array","items":{"type":"string"}}}}
             """,
@@ -178,10 +181,8 @@ public static class Tools
             }),
 
         new("retailor_jobs",
-            "Send jobs back to the worker for a fresh tailored resume, e.g. after the user changed their resume " +
-            "template or tailor settings. Pass ids, or allReady=true for every ReadyToApply job. Works on ReadyToApply, " +
-            "ActionNeeded and Failed jobs; they return to New and the worker re-tailors them within a minute. " +
-            "Only call when the user asks.",
+            "Only when the user asks: send ReadyToApply, ActionNeeded or Failed jobs back to New for a fresh tailored " +
+            "resume. Pass ids, or allReady=true.",
             """
             {"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"}},"allReady":{"type":"boolean"}}}
             """,
@@ -203,9 +204,8 @@ public static class Tools
             }),
 
         new("record_email",
-            "Attach a Gmail message to a job (use find_jobs first). confirmation → Applied, rejection → Rejected, " +
-            "interview → Interviewing (pass interviewDate only when a specific time is confirmed). The same thread and " +
-            "type is never recorded twice, so re-syncing is safe.",
+            "Attach a Gmail message to a job: confirmation → Applied, rejection → Rejected, interview → Interviewing. " +
+            "The same thread and type is recorded once, so re-syncing is safe.",
             """
             {"type":"object","required":["id","type"],"properties":{"id":{"type":"string"},
               "type":{"type":"string","enum":["confirmation","rejection","interview","assessment","other"]},
@@ -216,6 +216,20 @@ public static class Tools
             a => store.RecordEmail(Id(a), Parse<EmailType>(Str(a, "type")!), Str(a, "threadId"), Str(a, "subject"),
                 Date(a, "receivedAt") ?? DateTimeOffset.UtcNow, Date(a, "interviewDate"))),
     ];
+
+    // ── result shapes ──
+    // Tool results land in Claude's context, so each one carries only what the caller acts on next.
+
+    /// <summary>After a state change: enough to confirm it and report it.</summary>
+    static object Brief(Job j) => new { j.Id, j.Company, j.Title, j.Status, j.ActionDesc, j.DateApplied };
+
+    /// <summary>get_job without the dashboard-only parts (history, comments, bookkeeping).</summary>
+    static object Detail(Job j) => new
+    {
+        j.Id, j.Status, j.Source, j.Company, j.Title, j.MatchedTitle, j.ListingUrl, j.ApplyUrl, j.ExternalJobId,
+        j.Location, j.IsRemote, j.SalaryText, j.TechStack, j.DatePosted, j.IsEasyApply, j.ResumePath, j.ActionDesc,
+        j.LastError, j.DateApplied, j.InterviewDate, j.Emails,
+    };
 
     // ── argument helpers ──
 

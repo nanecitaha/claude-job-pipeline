@@ -63,6 +63,7 @@ The last line should say `... passed, 0 failed`. One `SKIP` line is fine.
 ```powershell
 dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
 dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
+dotnet publish src\JobPipeline.Enricher -c Release -o C:\JobPipeline\bin\enricher
 dotnet publish src\JobPipeline.Dashboard -c Release -o C:\JobPipeline\bin\dashboard
 ```
 
@@ -99,7 +100,11 @@ what you'd defend in an interview: anything here can become a "yes" on a form.
 
 What to look for:
 
-- **Keep** / **Exclude**: the only filters the hunt uses. Edit them in plain words.
+- **Keep** / **Exclude**: what you're looking for, in plain words (Claude reads these).
+- **Filters**: the same rules as term lists, applied by the enricher to every posting the hunt finds. A posting
+  must mention one `require_any` term; an `exclude_title` word in the title drops it; a `review_if` phrase, or a
+  title without a `role_words` word, sends it to **Review** for you instead. A file made before this section
+  existed uses the built-in defaults (shown in a new `hunt-config.md`); paste the section in to change them.
 - **Sites**: one row per search. Get the URL by searching on the site, setting its filters, and copying the
   address bar. Test it in the browser first.
 - **Manual-apply companies**: jobs there are found and get a resume, but Claude never applies; you do.
@@ -191,6 +196,19 @@ Tailoring worker started. Data folder: C:\JobPipeline\data. Tailor: TechStackTai
 
 Different folder, or `CopyMasterResumeTailor`? See Part 5.
 
+In a second PowerShell window, start the enricher. It reads every posting URL the hunt saves (from the employer's
+Greenhouse, Lever, Ashby, Workday or SmartRecruiters page where it can), applies your filters and hands kept jobs
+to the worker:
+
+```powershell
+C:\JobPipeline\bin\enricher\JobPipeline.Enricher.exe
+```
+
+It also writes `C:\JobPipeline\data\tech-terms.txt`, the list of technologies it looks for in each posting.
+Add or remove terms there; it's re-read for every job. The enricher's own settings (data folder, delay between
+requests, sites it never reads) are in `C:\JobPipeline\bin\enricher\appsettings.json`; put changes in
+`appsettings.Local.json` next to it, as with the worker.
+
 ### 4.2 See and edit your jobs (dashboard)
 
 The dashboard needs a sign-in. Create your user once (it asks for the password twice; at least 10 characters):
@@ -276,7 +294,11 @@ SELECT company, title, status, location, listing_url, apply_url, resume_path FRO
 
 | Status | Meaning |
 |---|---|
-| New | Found, waiting for the worker |
+| Found | URL saved by the hunt, waiting for the enricher |
+| Review | Read, but a filter couldn't decide (e.g. mentions a clearance); the reason is on the job. Keep it: `retry the Acme one`, or skip it |
+| Excluded | Read and filtered out (e.g. no C#/.NET mention, "Junior" title); the reason is on the job |
+| Couldn't read | The enricher couldn't read the posting (a site it skips, like LinkedIn, or no structured data). `fill in the jobs the enricher couldn't read` has Claude do it |
+| New | Read and kept, waiting for the worker |
 | ReadyToApply | Resume made |
 | Applied | Application sent |
 | ActionNeeded | Needs you: CAPTCHA, account, a question it couldn't answer, or a manual-apply company. `what's blocked on me?` shows why |
@@ -304,9 +326,10 @@ you can see them. That's for testing. Before sending real applications:
 cd C:\claude-job-pipeline
 git pull
 dotnet publish src\JobPipeline.Worker -c Release -o C:\JobPipeline\bin\worker
+dotnet publish src\JobPipeline.Enricher -c Release -o C:\JobPipeline\bin\enricher
 dotnet publish src\JobPipeline.Mcp    -c Release -o C:\JobPipeline\bin\mcp
 dotnet publish src\JobPipeline.Dashboard -c Release -o C:\JobPipeline\bin\dashboard
-# 2. Reopen Claude, start the worker (and dashboard) again
+# 2. Reopen Claude, start the worker, the enricher (and dashboard) again
 ```
 
 Your data folder, `appsettings.Local.json` and settings files are never overwritten. New sections added to the

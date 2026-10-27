@@ -15,14 +15,21 @@ to your first tailored resume, plus what to say to Claude.
 > read what gets submitted in your name.
 
 ```
- job-hunt skill ──add_jobs──►┐                       ┌──begin_apply_run / start_apply──► job-apply skill
+ job-hunt skill ──add_urls──►┐                       ┌──begin_apply_run / start_apply──► job-apply skill
                              │   job-pipeline MCP    │◄─mark_applied / flag_action / close_job
  job-email-sync ─record_email►│  (JobPipeline.Mcp)   │
                              └──────► jobs.db ◄──────┘
-                                         ▲
-                       claim / complete  │
-                          JobPipeline.Worker (tailors resumes)
+                                    ▲          ▲
+          read posting over HTTP,   │          │  claim / complete
+          filter, tech stack        │          │
+              JobPipeline.Enricher ─┘          └─ JobPipeline.Worker (tailors resumes)
 ```
+
+The hunt only collects posting URLs (`add_urls`): Claude never reads or re-types a job description. The enricher
+reads each posting from the employer's ATS API (Greenhouse, Lever, Ashby, Workday, SmartRecruiters), or from the
+page's schema.org JobPosting data, applies the Filters in `hunt-config.md`, extracts the tech stack with
+`tech-terms.txt`, and queues kept jobs for the worker. Postings it can't read go to `EnrichFailed`, where Claude can
+fill them in with `add_jobs`.
 
 Everything lives in one SQLite database, `jobs.db`. Every write goes through `JobStore` as a single
 `BEGIN IMMEDIATE` transaction that applies one allowed status change, so the MCP server, the worker and any
@@ -34,8 +41,9 @@ shared framework.
 ## Status flow
 
 ```
-New → Tailoring → ReadyToApply → Applying → Applied → Interviewing | Rejected
-                                     ↘ ActionNeeded / Skipped / Expired / Failed
+Discovered → Enriching → New → Tailoring → ReadyToApply → Applying → Applied → Interviewing | Rejected
+     ↘ NeedsReview / Excluded / EnrichFailed / Skipped (duplicate) / Expired
+                                                 ↘ ActionNeeded / Skipped / Expired / Failed
 ```
 
 | Flag-style field      | Now                                                        |
@@ -50,11 +58,12 @@ Who moves what:
 
 | Actor              | Transitions                                                                   |
 |--------------------|-------------------------------------------------------------------------------|
-| job-hunt           | creates `New` (duplicates by company+title, URL or source+job id are refused) |
+| job-hunt           | `add_urls` creates `Discovered` (known URLs refused); `add_jobs` creates `New` or fills an `EnrichFailed` row |
+| Enricher           | `Discovered → Enriching → New / NeedsReview / Excluded`; repeats → `Skipped`; unreadable → `EnrichFailed`; 404 → `Expired` |
 | Worker             | `New → Tailoring → ReadyToApply`; failures retry, then `Failed`               |
 | job-apply          | `ReadyToApply → Applying → Applied / ActionNeeded / Expired / Skipped`        |
 | job-email-sync     | confirmation → `Applied`, interview → `Interviewing`, rejection → `Rejected`  |
-| You (via Claude)   | `ActionNeeded / Failed →` retry, applied, or skip (`resolve_action`)          |
+| You (via Claude)   | `ActionNeeded / Failed / NeedsReview / Excluded / EnrichFailed →` retry, applied, or skip (`resolve_action`) |
 
 A job left in `Applying` by a crashed run is moved to `ActionNeeded` at the start of the next run, never retried,
 because it may already have been submitted.

@@ -59,7 +59,8 @@ New → Tailoring → ReadyToApply → Applying → Applied → Interviewing | R
 
 | Actor            | Moves                                                                     |
 |------------------|---------------------------------------------------------------------------|
-| job-hunt         | creates `New` (duplicates refused: company+title, URL, or source+job id)  |
+| job-hunt         | `add_urls` → `Discovered`; `add_jobs` → `New` (or fills an `EnrichFailed`/`Discovered` row) |
+| Enricher         | `Discovered → Enriching → New / NeedsReview / Excluded / Skipped (dup)`; `EnrichFailed`; `Expired` |
 | Worker           | `New → Tailoring → ReadyToApply`; retries, then `Failed` (`LastError`)    |
 | job-apply        | `ReadyToApply → Applying → Applied / ActionNeeded / Expired / Skipped`    |
 | job-email-sync   | confirmation → `Applied`, interview → `Interviewing`, rejection → `Rejected` |
@@ -76,17 +77,24 @@ src/JobPipeline.Core       Models.cs (Job, JobStatus, JobEdit, JobComment…), J
 src/JobPipeline.Mcp        McpServer.cs (stdio JSON-RPC), Tools.cs (tool definitions), Configs.cs (hunt/profile/resume md files)
 src/JobPipeline.Worker     TailoringWorker.cs (poll loop), Tailoring.cs (ITailor, PipelineOptions, CopyMasterResumeTailor),
                            TechStackTailor.cs (v1), DocxTemplate.cs (docx edits), ResumeLocation.cs, PdfConverters.cs (Word / LibreOffice)
+src/JobPipeline.Enricher   EnrichWorker.cs (poll loop), PostingReader.cs (URL → job: ATS link, JSON-LD, one hop), Ats.cs (ATS URL
+                           recognition + Greenhouse/Lever/Ashby/Workday/SmartRecruiters APIs), HuntRules.cs (Filters → verdict),
+                           TechStack.cs (tech-terms.txt extractor), Html.cs (text, links, JSON-LD), Fetcher.cs (HTTP, per-host delay)
 src/JobPipeline.Dashboard  Program.cs (minimal API), wwwroot/ (index.html, app.css, app.js: no framework, no build step)
 skills/                    job-hunt, job-apply, job-email-sync SKILL.md (Claude desktop skills)
+tools/JobPipeline.Probe    one-off check: can plain HTTP on this machine read job pages / ATS APIs (no deps)
 tests/JobPipeline.SelfTest dependency-free test runner (store, state machine, concurrency, tailor)
 tests/e2e                  mcp_e2e.py (MCP + worker processes), dashboard_e2e.py (dashboard API)
 docs/GETTING-STARTED.md    end-user setup from a fresh Windows PC
 ```
 
 ### MCP tools (`Tools.cs`)
-`get_config`, `add_jobs`, `find_jobs`, `get_job`, `list_jobs`, `pipeline_stats`, `begin_apply_run`, `start_apply`,
+`get_config`, `add_jobs`, `add_urls`, `find_jobs`, `get_job`, `list_jobs`, `pipeline_stats`, `begin_apply_run`, `start_apply`,
 `mark_applied`, `flag_action`, `close_job`, `resolve_action`, `update_tech_stack`, `retailor_jobs`, `record_email`.
 When you change a tool's name or arguments, update the skill that calls it in `skills/` and `tests/e2e/mcp_e2e.py`.
+Tool results go into Claude's context on every call, so keep them small: `McpServer.Wire` writes compact JSON
+without null fields, state changes return `Tools.Brief`, and `get_job` returns `Tools.Detail` unless asked for
+history. Keep tool descriptions to a line or two; the rules for when and how to call a tool belong in the skills.
 
 ### Dashboard API (`Dashboard/Program.cs`)
 | Endpoint | What it does |
