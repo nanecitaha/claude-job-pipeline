@@ -147,7 +147,8 @@ message. Keep messages in plain language: they're shown to the user as written.
   Colab or a PC; Hugging Face downloads are needed.
 - Decoding (must match in any C# port): average each token's probabilities across the windows that saw it, then
   take B, or I with nothing open, to start a term, I to extend it, O to close it. Terms are the posting's own
-  text, deduped in order.
+  text, deduped in order. Each span is then widened to the word it's glued to (`NET` → `.NET`, `C` → `C#`,
+  `ASP` → `ASP.NET`; see `widen()`), and overlapping spans are merged.
 - Not wired into the worker yet. Next: an `ITechStackExtractor` with ONNX Runtime and a WordPiece tokenizer,
   falling back to Claude when unsure.
 

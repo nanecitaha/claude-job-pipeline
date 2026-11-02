@@ -14,8 +14,10 @@ metrics.json (how close it gets to Claude on jobs it never saw during training).
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
+import shutil
 import time
 from collections import Counter
 
@@ -83,6 +85,7 @@ def main():
                "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
               open(os.path.join(args.out, "settings.json"), "w"), indent=2)
     json.dump(metrics, open(os.path.join(args.out, "metrics.json"), "w"), indent=2)
+    shutil.rmtree(os.path.join(args.out, "checkpoints"), ignore_errors=True)
     print(f"\nDone. Copy the folder '{args.out}' to the VPS (e.g. C:\\JobPipeline\\techstack-model).")
 
 
@@ -134,7 +137,8 @@ def fit(args, tok, jobs):
         args.model, num_labels=len(LABELS), id2label=dict(enumerate(LABELS)), label2id={l: i for i, l in enumerate(LABELS)})
     targs = TrainingArguments(
         output_dir=os.path.join(args.out, "checkpoints"), num_train_epochs=args.epochs, learning_rate=args.lr,
-        per_device_train_batch_size=args.batch, weight_decay=0.01, warmup_ratio=0.1, logging_steps=25,
+        per_device_train_batch_size=args.batch, weight_decay=0.01, logging_steps=25,
+        warmup_steps=max(1, int(math.ceil(len(items) / args.batch) * args.epochs * 0.1)),   # 10% warm-up
         save_strategy="no", report_to=[], seed=args.seed, fp16=torch.cuda.is_available())
     Trainer(model=model, args=targs, train_dataset=Windows(items),
             data_collator=DataCollatorForTokenClassification(tok)).train()
@@ -157,12 +161,34 @@ def decode(text, token_probs):
             if cur: spans.append(cur)
             cur = None
     if cur: spans.append(cur)
+    # Widen each span to the whole word it's glued to, then merge overlaps: "NET" -> ".NET", "ASP" + "NET Core" ->
+    # "ASP.NET Core", "C" -> "C#". Still the posting's own text.
+    merged = []
+    for s, e in sorted(widen(text, s, e) for s, e in spans):
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
     terms = []
-    for s, e in spans:
+    for s, e in merged:
         term = text[s:e].strip()
         if term and term not in terms:
             terms.append(term)
     return terms
+
+
+def widen(text, s, e):
+    """Letters and digits glued on either side join the term; so does a '.' between word characters (ASP.NET,
+    Node.js) or in front of one (.NET), and '#' or '+' right after (C#, C++). A sentence's final '.' doesn't."""
+    while s > 0 and (text[s - 1].isalnum() or (text[s - 1] == "." and text[s].isalnum())):
+        s -= 1
+    while e < len(text):
+        c = text[e]
+        if c.isalnum() or c in "#+" or (c == "." and e + 1 < len(text) and text[e + 1].isalnum()):
+            e += 1
+        else:
+            break
+    return s, e
 
 
 def collect(enc, probs_per_window):

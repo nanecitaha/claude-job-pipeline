@@ -43,7 +43,8 @@ The file holds the postings' text and company names, no personal data. It stays 
      missed most: ...
      extra (Claude didn't list): ...
    ```
-   These numbers come from about 15% of your jobs that the model never saw. As a rough guide: **F1 of 90% or
+   These numbers come from about 15% of your jobs that the model never saw. "Extra" isn't always wrong: it can be a
+   real term Claude skipped, so read that list too. As a rough guide: **F1 of 90% or
    more** is close enough to Claude to switch. 80–90% is usable, with Claude checking the jobs where the model is
    unsure. Under 80%, export more jobs and train again.
 6. Happy with it? Train the final model on all jobs, zip it and download it:
@@ -58,8 +59,8 @@ GPU it works, but it takes 1–3 hours. Don't train on the VPS: it would take ho
 
 ## 3. Put it on the VPS
 
-Unzip to `C:\JobPipeline\techstack-model\`. You should see `techstack.onnx`, `vocab.txt`, `tokenizer.json`,
-`labels.json`, `settings.json` and `metrics.json`.
+Unzip to `C:\JobPipeline\techstack-model\`. You should see `techstack.onnx`, `tokenizer.json` (plus
+`tokenizer_config.json`, and `vocab.txt` with some library versions), `labels.json`, `settings.json` and `metrics.json`.
 
 (The worker doesn't use the model yet. Wiring it in comes next, once the numbers above look good.)
 
