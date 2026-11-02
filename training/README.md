@@ -23,12 +23,34 @@ It prints a report. Things to look at:
 The file holds the postings' text and company names, no personal data. It stays out of git
 (`*.jsonl` is ignored).
 
+### Adding jobs from a hiring.cafe CSV (optional)
+
+Export your scraper's CSV (columns `Company & Title, Full View URL, Apply URL, Responsibilities, Requirements Summary,
+Tools, Full JD, Timestamp`) and merge it with the export from step 1:
+
+```
+python csv_to_training.py --csv jobs_extracted.csv --db training-db.jsonl --out training.jsonl
+```
+
+(Export step 1 to `training-db.jsonl` in that case.) It uses the same rules as `export-training`. Duplicate rows
+are dropped (one per Full View URL, the last one wins), and so are jobs where under 80% of the tools appear word for
+word. A job that's in both files keeps Claude's labels. For jobs in both, it also reports **how much hiring.cafe's
+Tools agree with Claude's**. hiring.cafe's AI sometimes tidies spellings (`Typescript` → `TypeScript`) or leaves
+terms out, so check this before mixing:
+
+- Both directions 90% or more: mixing is fine.
+- Lower: add `--csv-only-if-agree 0.9` (the CSV jobs are dropped if agreement is under 90%), or train on Claude's
+  jobs alone.
+
+The scraper must read the description with `innerText` (line breaks kept). Text with headings glued to the next
+word (`integrationsMicrosoft Graph`) hides terms and teaches the model wrong.
+
 ## 2. Train (Google Colab, ~20 minutes)
 
 1. Open https://colab.research.google.com → **New notebook**.
 2. **Runtime → Change runtime type → T4 GPU** → Save.
-3. Click the folder icon on the left and upload three files: `training.jsonl`, `train_techstack.py` and
-   `requirements.txt` (the last two are in this `training/` folder).
+3. Click the folder icon on the left and upload four files: `training.jsonl`, plus `train_techstack.py`,
+   `techstack_decode.py` and `requirements.txt` from this `training/` folder.
 4. In a cell, run:
    ```
    !pip install -q -r requirements.txt
@@ -63,6 +85,26 @@ Unzip to `C:\JobPipeline\techstack-model\`. You should see `techstack.onnx`, `to
 `tokenizer_config.json`, and `vocab.txt` with some library versions), `labels.json`, `settings.json` and `metrics.json`.
 
 (The worker doesn't use the model yet. Wiring it in comes next, once the numbers above look good.)
+
+## 4. Use it from Python (Mac, VPS, anywhere; no GPU)
+
+Copy `predict.py` and `techstack_decode.py` next to your script, and the model folder somewhere handy:
+
+```bash
+pip install onnxruntime tokenizers numpy
+```
+```python
+from predict import Extractor
+
+ex = Extractor("techstack-model")                                  # load once, reuse
+stack = ex.extract(job_description, title="Senior .NET Engineer")  # ["C#", ".NET 8", "ASP.NET Core", ...]
+print(", ".join(stack))
+```
+
+Or from the terminal: `python predict.py --model techstack-model --title "Senior .NET Engineer" posting.txt`
+(`pbpaste | python predict.py --model techstack-model` on a Mac reads what you copied).
+
+Pass the title when you have it: the model learned from "title, blank line, description".
 
 ## Retraining
 

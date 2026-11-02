@@ -5,8 +5,9 @@ namespace JobPipeline.Core;
 
 /// <summary>One labelled job for the tech stack model: the text and where each extracted term appears in it.</summary>
 public sealed record TrainingExample(
-    Guid Id, string Company, string Title, string Text, IReadOnlyList<string> TechStack,
-    IReadOnlyList<TermSpan> Spans, IReadOnlyList<string> NotFound);
+    string Id, string Company, string Title, string Text, IReadOnlyList<string> TechStack,
+    IReadOnlyList<TermSpan> Spans, IReadOnlyList<string> NotFound,
+    string? ListingUrl = null, string? ApplyUrl = null, string LabelSource = "claude");
 
 /// <summary>Characters [Start, End) of <see cref="TrainingExample.Text"/> hold <see cref="Term"/>, exactly as written.</summary>
 public sealed record TermSpan(int Start, int End, string Term);
@@ -45,7 +46,10 @@ public static class TrainingExport
             if (string.IsNullOrWhiteSpace(jd)) { noJd++; continue; }
             if (job.TechStack.Count == 0) { noStack++; continue; }
 
-            var example = Build(job.Id, job.Company, job.Title, jd, job.TechStack);
+            var example = Build(job.Id.ToString(), job.Company, job.Title, jd, job.TechStack) with
+            {
+                ListingUrl = job.ListingUrl, ApplyUrl = job.ApplyUrl,
+            };
             var hits = example.TechStack.Count - example.NotFound.Count;
             foreach (var t in example.NotFound) missed[t] = missed.GetValueOrDefault(t) + 1;
             terms += example.TechStack.Count;
@@ -59,7 +63,8 @@ public static class TrainingExport
         return new ExportReport(jobs, noJd, noStack, low, exported, terms, found, top);
     }
 
-    public static TrainingExample Build(Guid id, string company, string title, string jd, IEnumerable<string> techStack)
+    /// <remarks>training/csv_to_training.py does exactly the same in Python; keep the two in step.</remarks>
+    public static TrainingExample Build(string id, string company, string title, string jd, IEnumerable<string> techStack)
     {
         var text = $"{title.Trim()}\n\n{jd.Trim().Replace("\r\n", "\n")}";
         var stack = techStack.Select(t => t.Trim()).Where(t => t.Length > 0).Distinct(StringComparer.Ordinal).ToList();

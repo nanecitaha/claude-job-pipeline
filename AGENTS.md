@@ -141,6 +141,12 @@ message. Keep messages in plain language: they're shown to the user as written.
   `{id, company, title, text, techStack, spans:[{start,end,term}], notFound}`. `text` is title + blank line +
   job description. Spans are every word-for-word, word-bounded occurrence of each term, longest term first and
   non-overlapping. Jobs with under 80% of their terms found are dropped.
+- `training/csv_to_training.py` does the same for hiring.cafe CSVs, in Python; its `build()` must stay identical to
+  `TrainingExport.Build` (`tests/e2e/training_export_e2e.py` checks this in CI). It merges with the export
+  (Claude's labels win for a job in both; matched by normalized apply/listing URL, or company + title) and
+  reports agreement between the sources. Each line has a `labelSource` (`claude` / `hiringcafe`).
+- `training/predict.py` (`Extractor`) runs a trained model with only onnxruntime + tokenizers; decoding lives in
+  `training/techstack_decode.py`, shared with training.
 - `training/train_techstack.py` labels tokens O/B-TECH/I-TECH from the spans and fine-tunes
   `distilbert-base-cased` over sliding windows (256 tokens, stride 64). It scores against Claude on a
   hash-of-id 15% hold-out, then exports `techstack.onnx` (int8) plus the tokenizer. The training run happens on

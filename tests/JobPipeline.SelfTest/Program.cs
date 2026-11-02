@@ -453,7 +453,7 @@ Test("users: create, sign in, change password, delete; passwords hashed with a s
 
 Test("training export: exact spans, longest term first, word boundaries, match filter", () =>
 {
-    var ex = TrainingExport.Build(Guid.NewGuid(), "Acme", "Senior .NET Engineer",
+    var ex = TrainingExport.Build("t1", "Acme", "Senior .NET Engineer",
         "We use C#, ASP.NET Core and JavaScript. Go is a plus; Google Cloud too. Java not needed.\r\nC# again.",
         new[] { "C#", "ASP.NET Core", ".NET", "Java", "Go", "Kubernetes", " C# " });
     Eq("Senior .NET Engineer\n\nWe use C#, ASP.NET Core", ex.Text[..45], "title + blank line + description, LF only");
@@ -485,6 +485,8 @@ Test("training export: exact spans, longest term first, word boundaries, match f
     Eq(1, r.Exported);
     var line = System.Text.Json.JsonDocument.Parse(sw.ToString().Trim()).RootElement;
     Eq("Acme Inc.", line.GetProperty("company").GetString());
+    Eq("https://builtin.com/job/1", line.GetProperty("listingUrl").GetString());
+    Eq("claude", line.GetProperty("labelSource").GetString());
     Eq(true, line.GetProperty("spans").GetArrayLength() > 0);
 });
 
