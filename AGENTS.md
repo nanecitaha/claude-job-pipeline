@@ -80,6 +80,7 @@ src/JobPipeline.Dashboard  Program.cs (minimal API), wwwroot/ (index.html, app.c
 skills/                    job-hunt, job-apply, job-email-sync SKILL.md (Claude desktop skills)
 tests/JobPipeline.SelfTest dependency-free test runner (store, state machine, concurrency, tailor)
 tests/e2e                  mcp_e2e.py (MCP + worker processes), dashboard_e2e.py (dashboard API)
+training/                  train_techstack.py: tech stack model (fine-tune, compare with Claude, ONNX export); README
 docs/GETTING-STARTED.md    end-user setup from a fresh Windows PC
 ```
 
@@ -134,6 +135,22 @@ message. Keep messages in plain language: they're shown to the user as written.
 - PDF conversion: `Word` (COM, needs a logged-in session) or `LibreOffice` (headless).
 - Settings: `Worker/appsettings.json` → `Pipeline` section, overridden by `appsettings.Local.json` (gitignored).
 
+## Tech stack model (`training/`, `Core/TrainingExport.cs`)
+
+- `JobPipeline.Dashboard.exe export-training <file.jsonl>` writes one JSON object per job:
+  `{id, company, title, text, techStack, spans:[{start,end,term}], notFound}`. `text` is title + blank line +
+  job description. Spans are every word-for-word, word-bounded occurrence of each term, longest term first and
+  non-overlapping. Jobs with under 80% of their terms found are dropped.
+- `training/train_techstack.py` labels tokens O/B-TECH/I-TECH from the spans and fine-tunes
+  `distilbert-base-cased` over sliding windows (256 tokens, stride 64). It scores against Claude on a
+  hash-of-id 15% hold-out, then exports `techstack.onnx` (int8) plus the tokenizer. The training run happens on
+  Colab or a PC; Hugging Face downloads are needed.
+- Decoding (must match in any C# port): average each token's probabilities across the windows that saw it, then
+  take B, or I with nothing open, to start a term, I to extend it, O to close it. Terms are the posting's own
+  text, deduped in order.
+- Not wired into the worker yet. Next: an `ITechStackExtractor` with ONNX Runtime and a WordPiece tokenizer,
+  falling back to Claude when unsure.
+
 ## Database
 
 - Table `jobs`: the full job as JSON in a `doc` column, plus indexed columns (status, company, dates, URLs,
@@ -175,11 +192,12 @@ dotnet run --project src/JobPipeline.Worker                                     
 
 ## Branches (as of this writing)
 
-`main` ← `sqlite-store` (PR #1) ← `implement-tailor-worker` (PR #2) ← `dashboard-app` (PR #3) ← `dashboard-auth` (PR #4). Each branch is
+`main` ← `sqlite-store` (PR #1) ← `implement-tailor-worker` (PR #2) ← `dashboard-app` (PR #3) ← `dashboard-auth` (PR #4) ← `techstack-model` (PR #5). Each branch is
 stacked on the one before it, and the newest one has everything. Branch from the newest until these are merged.
 
 ## Known gaps / good next work
 
+0. **Wire the tech stack model into the worker** (see the tech stack model section).
 1. **Relevance-aware tailoring (v2)**: today `{{ADD_MISSING}}` adds every missing posting term. Next: add only
    terms the candidate can defend (checked against `resume.md`), and optionally rewrite bullets. This is the
    owner's area, so agree the approach with them first.

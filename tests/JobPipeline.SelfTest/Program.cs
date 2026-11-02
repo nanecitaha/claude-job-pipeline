@@ -451,6 +451,43 @@ Test("users: create, sign in, change password, delete; passwords hashed with a s
     Eq(1, s.UserCount());
 });
 
+Test("training export: exact spans, longest term first, word boundaries, match filter", () =>
+{
+    var ex = TrainingExport.Build(Guid.NewGuid(), "Acme", "Senior .NET Engineer",
+        "We use C#, ASP.NET Core and JavaScript. Go is a plus; Google Cloud too. Java not needed.\r\nC# again.",
+        new[] { "C#", "ASP.NET Core", ".NET", "Java", "Go", "Kubernetes", " C# " });
+    Eq("Senior .NET Engineer\n\nWe use C#, ASP.NET Core", ex.Text[..45], "title + blank line + description, LF only");
+    Eq(6, ex.TechStack.Count, "trimmed and deduped");
+    string At(TermSpan s) => ex.Text[s.Start..s.End];
+    foreach (var sp in ex.Spans) Eq(sp.Term, At(sp), "span text is the term, exactly");
+    Eq(2, ex.Spans.Count(x => x.Term == "C#"), "every occurrence");
+    Eq(1, ex.Spans.Count(x => x.Term == "ASP.NET Core"));
+    Eq(1, ex.Spans.Count(x => x.Term == ".NET"), ".NET in the title only: ASP.NET Core owns its own text");
+    Eq(1, ex.Spans.Count(x => x.Term == "Java"), "not inside JavaScript");
+    Eq(1, ex.Spans.Count(x => x.Term == "Go"), "not inside Google");
+    Eq("Kubernetes", ex.NotFound.Single());
+    Eq(true, ex.Spans.Zip(ex.Spans.Skip(1)).All(p => p.First.End <= p.Second.Start), "sorted, no overlaps");
+
+    var dir = NewDir();
+    var s = new JobStore(dir);
+    var good = Posting();
+    good.JdText = "We need C#, .NET 8 and RabbitMQ.";                          // all terms in its JD
+    s.AddJob(good);
+    var reworded = Posting("Globex", "Senior .NET Developer", "https://g/1");
+    reworded.TechStack = new() { "Kafka", "Terraform", "Rust", "C#" };          // 3 of 4 missing → left out
+    s.AddJob(reworded);
+    s.AddJob(new NewJob { Company = "NoJd", Title = "Engineer", ListingUrl = "https://n/1", TechStack = new() { "C#" } });
+    var sw = new StringWriter();
+    var r = TrainingExport.Write(s, sw);
+    Eq(3, r.Jobs);
+    Eq(1, r.NoDescription);
+    Eq(1, r.LowMatch);
+    Eq(1, r.Exported);
+    var line = System.Text.Json.JsonDocument.Parse(sw.ToString().Trim()).RootElement;
+    Eq("Acme Inc.", line.GetProperty("company").GetString());
+    Eq(true, line.GetProperty("spans").GetArrayLength() > 0);
+});
+
 var (tailorPassed, tailorFailed) = TailorTests.Run();
 passed += tailorPassed;
 failures += tailorFailed;

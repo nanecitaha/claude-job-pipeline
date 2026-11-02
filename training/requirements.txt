@@ -1,0 +1,7 @@
+# Google Colab already has torch and transformers; this installs the rest.
+torch
+transformers>=4.40
+accelerate
+onnx
+onnxruntime
+numpy
