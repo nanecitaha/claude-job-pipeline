@@ -193,7 +193,7 @@ dotnet run --project src/JobPipeline.Worker                                     
 
 ## Branches (as of this writing)
 
-`main` ← `sqlite-store` (PR #1) ← `implement-tailor-worker` (PR #2) ← `dashboard-app` (PR #3) ← `dashboard-auth` (PR #4) ← `techstack-model` (PR #5). Each branch is
+`main` ← `sqlite-store` (PR #1) ← `implement-tailor-worker` (PR #2) ← `dashboard-app` (PR #3) ← `dashboard-auth` (PR #4) ← `techstack-model` (PR #6). Each branch is
 stacked on the one before it, and the newest one has everything. Branch from the newest until these are merged.
 
 ## Known gaps / good next work
