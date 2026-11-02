@@ -17,11 +17,12 @@ using Microsoft.AspNetCore.Http.HttpResults;
 //   JobPipeline.Dashboard.exe user passwd <name>    change a password (signs that user out everywhere)
 //   JobPipeline.Dashboard.exe user remove <name>    delete a user
 //   JobPipeline.Dashboard.exe user list
+//   JobPipeline.Dashboard.exe export-training <file.jsonl> [min-match]   training data for the tech stack model
 //
 // Settings: appsettings.json next to the exe, overridden by appsettings.Local.json (not in the repo) or the
 // command line, e.g.  JobPipeline.Dashboard.exe --Dashboard:DataDir=D:\jobs --urls=http://localhost:5090
 
-// "user ..." commands take the leading words; everything from the first --option on is configuration.
+// "user ..." and "export-training ..." commands take the leading words; everything from the first --option on is configuration.
 var firstOption = Array.FindIndex(args, a => a.StartsWith('-'));
 var words = firstOption < 0 ? args : args[..firstOption];
 var options = firstOption < 0 ? Array.Empty<string>() : args[firstOption..];
@@ -39,7 +40,7 @@ var dataDir = builder.Configuration["Dashboard:DataDir"];
 var store = new JobStore(string.IsNullOrWhiteSpace(dataDir) ? JobStore.DefaultDataDir() : dataDir);
 
 if (words.Length > 0)
-    return UserCommands.Run(store, words);
+    return words[0] == "export-training" ? ExportCommand.Run(store, words) : UserCommands.Run(store, words);
 
 builder.Services.AddSingleton(store);
 builder.Services.ConfigureHttpJsonOptions(o =>

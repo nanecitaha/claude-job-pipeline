@@ -6,3 +6,7 @@ resume.md
 applicant-profile.md
 __pycache__/
 appsettings.Local.json
+
+# tech stack model: training data and trained models stay local
+*.jsonl
+techstack-model/

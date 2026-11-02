@@ -31,3 +31,5 @@ jobs:
         run: python tests/e2e/mcp_e2e.py
       - name: End-to-end (dashboard API)
         run: python tests/e2e/dashboard_e2e.py
+      - name: End-to-end (training data, C# export matches Python CSV converter)
+        run: python tests/e2e/training_export_e2e.py
